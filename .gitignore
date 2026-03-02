@@ -1,0 +1,7 @@
+/solutions_log
+iterations_pricing_reduced_costs.csv
+iterations_pricing.csv
+results*
+tusp_solver
+*.log
+*obj
