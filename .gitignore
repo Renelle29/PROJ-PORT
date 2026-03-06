@@ -5,4 +5,4 @@ results*
 tusp_solver
 *.log
 *obj
-/visualizations*
+/visualizations
