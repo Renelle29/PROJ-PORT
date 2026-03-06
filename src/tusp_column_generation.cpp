@@ -90,7 +90,7 @@ static void ensure_dir(const string &path)
 int main(int argc, char *argv[])
 {
     // CLI:
-    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds]
+    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths]
     if (argc < 3)
     {
         cerr << "Usage: tusp_solver \"<station name>\" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds]" << endl;
@@ -105,6 +105,7 @@ int main(int argc, char *argv[])
     int time_budget = 7200; // column generation time budget
     int max_iters = 1000;
     double time_budget_binary = 0.0; // 0 means no time limit for final binary master (integer solve)
+    int k_paths = 1;
 
     vector<double> numeric_args;
     for (int i = 3; i < argc; i++)
@@ -125,6 +126,10 @@ int main(int argc, char *argv[])
     if (numeric_args.size() > 2)
     {
         time_budget_binary = numeric_args[2];
+    }
+    if (numeric_args.size() > 3)
+    {
+        k_paths = static_cast<int>(numeric_args[3]);
     }
 
     // Runtime logs are written to files in the working directory.
@@ -381,7 +386,7 @@ int main(int argc, char *argv[])
             int before = np;
             vector<double> best_rcosts(trains.size(), numeric_limits<double>::quiet_NaN());
             // Per-train shortest path pricing.
-            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts);
+            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts, k_paths);
 
             iter++;
             auto iter_seconds = duration_cast<duration<double>>(high_resolution_clock::now() - iter_start).count();
