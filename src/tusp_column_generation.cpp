@@ -843,6 +843,27 @@ int main(int argc, char *argv[])
         logger.log(INFO, is_integer ? "Solution is integer!" : "Solution is fractional");
         logger.log(INFO, "There are " + to_string(zero_paths) + " unused paths over " + to_string(nb_paths) + " paths.");
 
+        // Vérifier l'intégralité des lambdas
+        bool is_integer = true;
+        int nb_paths = 0;
+        int zero_paths = 0;
+        for (Path &path : paths) {
+            nb_paths++;
+            double lambda_val = path.get_lambda().get(GRB_DoubleAttr_X);
+            if (lambda_val > 0.001) { // Afficher seulement les non-nulles
+                logger.log(INFO, "Path " + to_string(path.get_id()) + 
+                        " train " + to_string(path.get_train()) + 
+                        " lambda = " + to_string(lambda_val));
+                if (lambda_val > 0.001 && lambda_val < 0.999)
+                    is_integer = false;
+            }
+            else{
+                zero_paths++;
+            }
+        }
+        logger.log(INFO, is_integer ? "Solution is integer!" : "Solution is fractional");
+        logger.log(INFO, "There are " + to_string(zero_paths) + " unused paths over " + to_string(nb_paths) + " paths.");
+
         cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
 
         cerr << "Gurobi solve of the binary master with the generated columns (it can take a while)..." << endl;
