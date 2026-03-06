@@ -194,7 +194,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
     return np;
 }
 
-RcspResult shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha)
+RcspResult shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, int k_paths)
 {
     int N = static_cast<int>(nodes.size());
     int k = train.get_ID();

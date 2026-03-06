@@ -97,6 +97,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+    bool verbose = true;
     string station = argv[1];
     string scenario = argv[2];
 
@@ -241,7 +242,7 @@ int main(int argc, char *argv[])
     // 2) Compute time step and build the time-space network.
     t_s = compute_time_step(trains, services, train_types, plinks);
     logger.log(INFO, "Time step is worth: " + to_string(t_s));
-
+    logger.log(INFO, "Time horizon is worth: " + to_string(T));
 
     debuglogger.log(DEBUG, "Build Time-space network nodes");
     int N = build_nodes(nodes, nn, T, t_s);
@@ -262,6 +263,19 @@ int main(int argc, char *argv[])
         }
     }
     debuglogger.log(DEBUG, "All arcs built");
+
+    if (verbose){
+        /*for (Node node : nodes){
+            logger.log(INFO, "Built node : ID - " + to_string(node.getPNode()) + " TIME - " + to_string(node.getTime()));
+        }*/
+        /*for (Arc arc : arcs){
+            logger.log(INFO, "Built arc : FROM - " + to_string(arc.get_from()) + " TO - " + to_string(arc.get_to()) + " SERVICE - " + to_string(arc.get_service()) + " TYPE - " + to_string(arc.get_type()));
+        }*/
+        for (Train train : trains){
+            logger.log(INFO, "Train : ID - " + to_string(train.get_ID()) + " NAME - " + train.get_name() + " TYPE - " + to_string(train.get_type()) + " ARRIVAL - " + to_string(train.get_a_t()) + " DEPARTURE - " + to_string(train.get_d_t()));
+        }
+    }
+
     cerr << "Constructed three-layer time-space network (nodes + arcs)." << endl;
 
     // Prepare pricing report files (headers depend on train count).
@@ -436,6 +450,27 @@ int main(int argc, char *argv[])
         double continuous_obj = Master_obj.getValue();
         logger.log(INFO, "Obtained continuous objective value: " + to_string(continuous_obj));
         logger.log(INFO, to_string(paths.size() - np0 + 1) + " columns generated.");
+
+        // Vérifier l'intégralité des lambdas
+        bool is_integer = true;
+        int nb_paths = 0;
+        int zero_paths = 0;
+        for (Path &path : paths) {
+            nb_paths++;
+            double lambda_val = path.get_lambda().get(GRB_DoubleAttr_X);
+            if (lambda_val > 0.001) { // Afficher seulement les non-nulles
+                logger.log(INFO, "Path " + to_string(path.get_id()) + 
+                        " train " + to_string(path.get_train()) + 
+                        " lambda = " + to_string(lambda_val));
+                if (lambda_val > 0.001 && lambda_val < 0.999)
+                    is_integer = false;
+            }
+            else{
+                zero_paths++;
+            }
+        }
+        logger.log(INFO, is_integer ? "Solution is integer!" : "Solution is fractional");
+        logger.log(INFO, "There are " + to_string(zero_paths) + " unused paths over " + to_string(nb_paths) + " paths.");
 
         cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
 
