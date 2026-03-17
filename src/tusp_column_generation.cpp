@@ -22,9 +22,161 @@
 #include "path_builder.h"
 #include "gurobi_c++.h"
 #include "Arc-path_formulation.h"
+#include "DWResults.h"
 
 using namespace std;
 using namespace std::chrono;
+
+static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget)
+{
+    DWResults results;
+
+    //debuglogger.log(DEBUG, "Call Gurobi solver");
+    try
+    {
+        // Gurobi environment (single shared env for master and pricing).
+        GRBEnv env = GRBEnv(true);
+        env.set("LogFile", "mip1.log"); // Gurobi log in working directory.
+        env.set("LogToConsole", "0");
+        env.start();
+
+        // Master problem (restricted) for column generation.
+        //logger.log(INFO, "Solving arc-path model");
+        //debuglogger.log(DEBUG, "--- Build Arc-path problem ---");
+        GRBModel master = GRBModel(env);
+        master.set("JSONSolDetail", "1");
+        GRBLinExpr Master_obj = 0;
+
+        vector<Path> paths;
+        vector<vector<bool>> s_assigned(nt);
+        vector<GRBConstr> path_constraints;
+
+        //debuglogger.log(DEBUG, "Initialize master problem");
+        int np0 = initialize_master_AP(master, Master_obj, paths, s_assigned, path_constraints, trains, arcs, nn, T, t_s, ns);
+
+        int np = paths.size();
+        int iter = 0;
+        auto start_cg = high_resolution_clock::now();
+        string stop_reason;
+
+        cerr << "Starting column generation (arc-path formulation)..." << endl;
+        // 4) Column generation loop:
+        //    - Solve the restricted master problem (RMP) with the current path set.
+        //    - Extract dual multipliers for flow, service, and incompatibility constraints.
+        //    - Build reduced costs on the arc network.
+        //    - Pricing: per-train RCSP shortest path (pricing_algorithm)
+        //    - Add every negative reduced-cost path found to the RMP.
+        //    - Stop when:
+        //        * time budget reached
+        //        * no new column added
+        //        * max_iters reached
+        while (iter < max_iters)
+        {
+            auto iter_start = high_resolution_clock::now();
+            master.setObjective(Master_obj, GRB_MINIMIZE);
+            master.optimize();
+
+            if (master.get(GRB_IntAttr_Status) != 2)
+            {
+                cerr << "Reduced master non optimal" << endl;
+                break;
+            }
+
+            // Debug: report dummy path usage per train in the current RMP solution.
+            vector<double> dummy_lambda(nt, 0.0);
+            for (const Path &path : paths)
+            {
+                const vector<int> arc_ids = path.get_arcs();
+                bool has_dummy = false;
+                for (int a_id : arc_ids)
+                {
+                    if (arcs[a_id].get_type() == DUMMY)
+                    {
+                        has_dummy = true;
+                        break;
+                    }
+                }
+                if (has_dummy)
+                {
+                    int k = path.get_train();
+                    if (k >= 1 && k <= nt)
+                    {
+                        dummy_lambda[k - 1] += path.get_lambda().get(GRB_DoubleAttr_X);
+                    }
+                }
+            }
+
+            // Duals from RMP.
+            vector<double> pi;
+            vector<vector<double>> alpha(ns);
+            vector<vector<double>> mu(nn);
+            build_dual_vectors(pi, alpha, mu, path_constraints, nt, s_assigned, nn, T, t_s);
+            compute_reduced_cost_network(arcs, nt, alpha, mu, t_s, false);
+
+            int before = np;
+            vector<double> best_rcosts(trains.size(), numeric_limits<double>::quiet_NaN());
+            // Per-train shortest path pricing.
+            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts, k_paths);
+
+            iter++;
+            auto iter_seconds = duration_cast<duration<double>>(high_resolution_clock::now() - iter_start).count();
+            auto elapsed = duration_cast<seconds>(high_resolution_clock::now() - start_cg).count();
+            int new_paths = np - before;
+            double rc_sum = 0.0;
+            int rc_count = 0;
+            for (double rc : best_rcosts)
+            {
+                if (!isnan(rc))
+                {
+                    rc_sum += rc;
+                    rc_count++;
+                }
+            }
+
+            cerr << "Iteration " << iter << " finished: new_paths=" << new_paths
+                 << ", sum_best_reduced_costs=" << fixed << setprecision(6) << rc_sum
+                 << " (sum of best per-train reduced costs over " << rc_count << " trains)" << endl;
+
+            // Stop if time budget is reached or no new column was added.
+            stop_reason.clear();
+            if (elapsed >= time_budget)
+            {
+                stop_reason = "time_budget";
+            }
+            else if (new_paths == 0)
+            {
+                stop_reason = "no_new_columns";
+            }
+            else if (iter >= max_iters)
+            {
+                stop_reason = "max_iters";
+            }
+
+            if (!stop_reason.empty())
+            {
+                break;
+            }
+        }
+        
+        cerr << "Column generation finished after " << iter << " iterations and " << duration_cast<seconds>(high_resolution_clock::now() - start_cg).count() << " seconds." << endl;
+        cerr << "Final solve of the restricted master problem solved with " << paths.size() << " columns." << endl;
+
+        master.setObjective(Master_obj, GRB_MINIMIZE);
+        master.update();
+        master.optimize();
+        double continuous_obj = Master_obj.getValue();
+        cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
+
+        results.continuous_obj = continuous_obj;
+        results.paths = paths;
+        results.np0 = np0;
+    }
+    catch (...){
+        cerr << "On a été dans le catch, c'est pas cool, j'pense y a un problème :'( bonne chance thierry & bruno !" << endl;
+    }
+
+    return results;
+}
 
 // Simple CLI helper: detect numeric strings (optional sign, optional decimal).
 static bool is_number(const string &s)
@@ -299,8 +451,12 @@ int main(int argc, char *argv[])
         }
         iter_pricing_trains << endl;
     }
-
-    // 3) Solve with column generation (arc-path formulation).
+    
+    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget);
+    return 0;
+   
+//// START  
+// 3) Solve with column generation (arc-path formulation).
     debuglogger.log(DEBUG, "Call Gurobi solver");
     try
     {
@@ -444,6 +600,7 @@ int main(int argc, char *argv[])
             }
         }
 
+
         cerr << "Column generation finished after " << iter << " iterations and " << duration_cast<seconds>(high_resolution_clock::now() - start_cg).count() << " seconds." << endl;
 
         cerr << "Final solve of the restricted master problem solved with " << paths.size() << " columns." << endl;
@@ -453,8 +610,9 @@ int main(int argc, char *argv[])
         master.update();
         master.optimize();
         double continuous_obj = Master_obj.getValue();
-        logger.log(INFO, "Obtained continuous objective value: " + to_string(continuous_obj));
-        logger.log(INFO, to_string(paths.size() - np0 + 1) + " columns generated.");
+//// END
+        logger.log(INFO, "Obtained continuous objective value: " + to_string(dwresults.continuous_obj));
+        logger.log(INFO, to_string(dwresults.paths.size() - dwresults.np0 + 1) + " columns generated.");
 
         // Vérifier l'intégralité des lambdas
         bool is_integer = true;
