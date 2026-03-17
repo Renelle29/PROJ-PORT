@@ -7,7 +7,7 @@ class DWResults{
 
 public:
     double continuous_obj;
-    vector<Path> paths;
+    vector<pair<double,Path>> extended_paths;
     int np0;
 };
 

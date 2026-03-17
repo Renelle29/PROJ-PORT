@@ -111,7 +111,7 @@ int compute_reduced_cost_network(vector<Arc> &arcs, int nt, vector<vector<double
     return 1;
 }
 
-int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Node> nodes, vector<Arc> arcs, vector<vector<bool>> s_assigned, vector<vector<double>> alpha, vector<double> pi, int nn, int T, int t_s, int ns, vector<double> *best_rcosts, int k_paths)
+int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Node> nodes, vector<Arc> arcs, vector<vector<bool>> s_assigned, vector<vector<double>> alpha, vector<double> pi, int nn, int T, int t_s, int ns, vector<vector<int>> forbidden_arcs, vector<double> *best_rcosts, int k_paths)
 {
     int np = paths.size();
     int nt = trains.size();
@@ -125,7 +125,20 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
     GRBColumn column;
     for (int k = 1; k <= nt; k++)
     {
-        vector<RcspResult> sps = shortest_path_algorithm_rcsp(nodes, arcs, nn, trains[k - 1], T, t_s, alpha, k_paths);
+
+        vector<int> forbidden_arcs_k = forbidden_arcs[k-1];
+
+        // TODO mettre à jour arcs avant algo de plus court chemins
+        // WARNING : Horrible complexité - Deep copy de arcs puis clear
+        vector<Arc> new_arcs;
+        for (Arc arc : arcs)
+        {
+            if (count(forbidden_arcs_k.begin(), forbidden_arcs_k.end(), arc.get_ID()) == 0)
+                new_arcs.push_back(arc);
+        }
+        
+
+        vector<RcspResult> sps = shortest_path_algorithm_rcsp(nodes, new_arcs, nn, trains[k - 1], T, t_s, alpha, k_paths);
         double best_rcost = INF;
 
         for (RcspResult &sp : sps)

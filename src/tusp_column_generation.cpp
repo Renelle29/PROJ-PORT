@@ -27,7 +27,98 @@
 using namespace std;
 using namespace std::chrono;
 
-static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget)
+int best_objective = 1e9;
+vector<Path> best_paths = {};
+
+static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs);
+
+// TODO
+static pair<vector<Arc>, vector<Arc>> partition_arcs(Path path1, Path path2)
+{
+    pair<vector<Arc>, vector<Arc>> partition;
+    vector<int> arc_ids = path1.get_arcs();
+    for (int i : arc_ids)
+        cerr << i << endl;
+    return partition;
+}
+
+static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs)
+{
+
+    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
+
+    cerr << best_objective << endl;
+    // Pruning
+    if (dwresults.continuous_obj >= best_objective)
+        return dwresults.continuous_obj;
+
+    // Branching - NAIVE FOR NOW - Think about other branching ideas
+
+    int fractional_train = -1;
+    Path path1;
+    Path path2;
+
+    // Trouver train fractionnel et deux chemins fractionels
+    for (auto [lambda, path] : dwresults.extended_paths)
+    {
+
+        if (lambda > 1e-9 && lambda < (1 - 1e-9))
+            if (fractional_train == -1)
+            {
+                fractional_train = path.get_train();
+                path1 = path;
+            }
+            else if (path.get_train() == fractional_train)
+            {
+                path2 = path;
+                break;
+            }
+    }
+
+    cerr << "Fractional train : " << fractional_train << endl;
+    // Si solution entière, sortir de la boucle
+    if (fractional_train == -1)
+    {
+        if (dwresults.continuous_obj < best_objective)
+        {
+            best_objective = dwresults.continuous_obj;
+            vector<Path> new_paths;
+
+            for (auto [lambda, path] : dwresults.extended_paths)
+                new_paths.push_back(path);
+            
+            best_paths = new_paths;
+        }
+        return dwresults.continuous_obj;
+    }
+
+    // Sinon trouver premier noeud de changement
+    // Partitionner les arcs sortant de ce noeud, et utiliser chaque partition comme forbidden_nodes
+    pair<vector<Arc>, vector<Arc>> partition = partition_arcs(path1, path2);
+
+    vector<vector<int>> forbidden_arcs1 = forbidden_arcs;
+    for (Arc arc : partition.first)
+    {
+        forbidden_arcs1[fractional_train].push_back(arc.get_ID());
+    }
+
+    vector<vector<int>> forbidden_arcs2 = forbidden_arcs;
+    for (Arc arc : partition.second)
+    {
+        forbidden_arcs2[fractional_train].push_back(arc.get_ID());
+    }
+
+    // Appels récursifs
+    int best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1);
+    int best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2);
+
+    if (best_obj1 < best_obj2)
+        return best_obj1;
+
+    return best_obj2;
+}
+
+static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs)
 {
     DWResults results;
 
@@ -116,7 +207,7 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
             int before = np;
             vector<double> best_rcosts(trains.size(), numeric_limits<double>::quiet_NaN());
             // Per-train shortest path pricing.
-            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts, k_paths);
+            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, forbidden_arcs, &best_rcosts, k_paths);
 
             iter++;
             auto iter_seconds = duration_cast<duration<double>>(high_resolution_clock::now() - iter_start).count();
@@ -168,7 +259,14 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
         cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
 
         results.continuous_obj = continuous_obj;
-        results.paths = paths;
+        
+        vector<pair<double,Path>> extended_paths;
+        for (Path path : paths)
+        {
+            extended_paths.push_back(make_pair(path.get_lambda().get(GRB_DoubleAttr_X), path));
+        }
+        results.extended_paths = extended_paths;
+        
         results.np0 = np0;
     }
     catch (...){
@@ -452,7 +550,17 @@ int main(int argc, char *argv[])
         iter_pricing_trains << endl;
     }
     
-    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget);
+    vector<vector<int>> forbidden_arcs;
+    for (const Train &train : trains)
+    {
+        forbidden_arcs.push_back({});
+    }
+
+    //TODO START BOUCLE B&P
+    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
+    //END BOUCLE B&P
+
+    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
     return 0;
    
 //// START  
@@ -542,7 +650,7 @@ int main(int argc, char *argv[])
             int before = np;
             vector<double> best_rcosts(trains.size(), numeric_limits<double>::quiet_NaN());
             // Per-train shortest path pricing.
-            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts, k_paths);
+            //np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts, k_paths);
 
             iter++;
             auto iter_seconds = duration_cast<duration<double>>(high_resolution_clock::now() - iter_start).count();
@@ -612,7 +720,7 @@ int main(int argc, char *argv[])
         double continuous_obj = Master_obj.getValue();
 //// END
         logger.log(INFO, "Obtained continuous objective value: " + to_string(dwresults.continuous_obj));
-        logger.log(INFO, to_string(dwresults.paths.size() - dwresults.np0 + 1) + " columns generated.");
+        //logger.log(INFO, to_string(dwresults.paths.size() - dwresults.np0 + 1) + " columns generated.");
 
         // Vérifier l'intégralité des lambdas
         bool is_integer = true;
