@@ -8,6 +8,7 @@
 #include <limits>
 #include <cmath>
 #include <sys/stat.h>
+#include <algorithm>
 
 // Our includes
 #include "input_reader.h"
@@ -33,18 +34,33 @@ vector<Path> best_paths = {};
 static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs);
 
 // TODO
-static pair<vector<Arc>, vector<Arc>> partition_arcs(Path path1, Path path2)
+static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<Node> nodes, Path path1, Path path2)
 {
-    pair<vector<Arc>, vector<Arc>> partition;
-    vector<int> arc_ids = path1.get_arcs();
-    for (int i : arc_ids)
-        cerr << i << endl;
+    pair<vector<int>, vector<int>> partition;    
+    vector<int> arc_ids1 = path1.get_arcs();
+    reverse(arc_ids1.begin(), arc_ids1.end());
+    vector<int> arc_ids2 = path2.get_arcs();
+    for (int i : arc_ids1)
+    {
+        if (count(arc_ids2.begin(), arc_ids2.end(), i) == 0)
+        {
+            int separation_id = arcs[i].get_from();
+            Node node = nodes[separation_id];
+            vector<int> fArcs = node.getFromArcs();
+
+            // TODO improve separation of arcs
+            partition.first = {i};
+            fArcs.erase(std::remove(fArcs.begin(), fArcs.end(), i), fArcs.end());
+            partition.second = fArcs;
+            break;
+        }
+    }
+
     return partition;
 }
 
 static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs)
 {
-
     DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
 
     cerr << best_objective << endl;
@@ -94,18 +110,18 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
 
     // Sinon trouver premier noeud de changement
     // Partitionner les arcs sortant de ce noeud, et utiliser chaque partition comme forbidden_nodes
-    pair<vector<Arc>, vector<Arc>> partition = partition_arcs(path1, path2);
+    pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2);
 
     vector<vector<int>> forbidden_arcs1 = forbidden_arcs;
-    for (Arc arc : partition.first)
+    for (int arc_id : partition.first)
     {
-        forbidden_arcs1[fractional_train].push_back(arc.get_ID());
+        forbidden_arcs1[fractional_train].push_back(arc_id);
     }
 
     vector<vector<int>> forbidden_arcs2 = forbidden_arcs;
-    for (Arc arc : partition.second)
+    for (int arc_id : partition.second)
     {
-        forbidden_arcs2[fractional_train].push_back(arc.get_ID());
+        forbidden_arcs2[fractional_train].push_back(arc_id);
     }
 
     // Appels récursifs

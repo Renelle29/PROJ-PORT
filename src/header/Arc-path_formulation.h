@@ -29,6 +29,7 @@ int build_dual_vectors(vector<double> &pi, vector<vector<double>> &alpha, vector
 
 int compute_reduced_cost_network(vector<Arc> &arcs, int nt, vector<vector<double>> alpha, vector<vector<double>> mu, int t_s, bool include_alpha);
 
+
 int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Node> nodes, vector<Arc> arcs, vector<vector<bool>> s_assigned, vector<vector<double>> alpha, vector<double> pi, int nn, int T, int t_s, int ns, vector<vector<int>> forbidden_arcs, vector<double> *best_rcosts = nullptr, int k_paths=1);
 
 vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, int k_paths = 1);
