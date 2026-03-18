@@ -44,6 +44,7 @@ static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<No
     {
         if (count(arc_ids2.begin(), arc_ids2.end(), i) == 0)
         {
+            cerr << "Path1 using arc : " << i << " but not Path2" << endl;
             int separation_id = arcs[i].get_from();
             Node node = nodes[separation_id];
             vector<int> fArcs = node.getFromArcs();
@@ -54,19 +55,24 @@ static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<No
             partition.second = fArcs;
             break;
         }
+        cerr << "Path1 & Path2 using arc : " << i << endl;
     }
 
     return partition;
 }
 
-static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs)
+static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int depth=0)
 {
+    logger.log(INFO, "Starting a new DW iteration, depth : " + to_string(depth));
     DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
 
-    cerr << best_objective << endl;
+    logger.log(INFO, "Found a continuous objective of : " + to_string(dwresults.continuous_obj));
     // Pruning
     if (dwresults.continuous_obj >= best_objective)
+    {
+        logger.log(INFO, "Pruning ! Best objective : " + to_string(best_objective));
         return dwresults.continuous_obj;
+    }
 
     // Branching - NAIVE FOR NOW - Think about other branching ideas
 
@@ -82,11 +88,14 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
             if (fractional_train == -1)
             {
                 fractional_train = path.get_train();
+                logger.log(INFO, "Found a train with fractional lambdas : " + to_string(fractional_train));
                 path1 = path;
+                logger.log(INFO, "Path 1 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
             }
             else if (path.get_train() == fractional_train)
             {
                 path2 = path;
+                logger.log(INFO, "Path 2 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
                 break;
             }
     }
@@ -95,6 +104,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     // Si solution entière, sortir de la boucle
     if (fractional_train == -1)
     {
+        logger.log(INFO, "Found an integer solution of value : " + to_string(dwresults.continuous_obj));
         if (dwresults.continuous_obj < best_objective)
         {
             best_objective = dwresults.continuous_obj;
@@ -112,21 +122,37 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     // Partitionner les arcs sortant de ce noeud, et utiliser chaque partition comme forbidden_nodes
     pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2);
 
+    // Can't forbid dummy paths (as they are used in initialisation)
+    bool no_dummy1 = true;
+    bool no_dummy2 = true;
+
     vector<vector<int>> forbidden_arcs1 = forbidden_arcs;
     for (int arc_id : partition.first)
     {
-        forbidden_arcs1[fractional_train].push_back(arc_id);
+        if (arcs[arc_id].get_type() == DUMMY)
+            no_dummy1 = false;
+        logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for left node");
+        forbidden_arcs1[fractional_train-1].push_back(arc_id);
     }
 
     vector<vector<int>> forbidden_arcs2 = forbidden_arcs;
     for (int arc_id : partition.second)
     {
-        forbidden_arcs2[fractional_train].push_back(arc_id);
+        if (arcs[arc_id].get_type() == DUMMY)
+            no_dummy2 = false;
+        logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for right node");
+        forbidden_arcs2[fractional_train-1].push_back(arc_id);
     }
 
     // Appels récursifs
-    int best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1);
-    int best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2);
+    depth++;
+    int best_obj1 = 1e9;
+    int best_obj2 = 1e9;
+        
+    if (no_dummy1)
+        int best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, depth);
+    if (no_dummy2)
+        int best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, depth);
 
     if (best_obj1 < best_obj2)
         return best_obj1;
@@ -160,6 +186,16 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
 
         //debuglogger.log(DEBUG, "Initialize master problem");
         int np0 = initialize_master_AP(master, Master_obj, paths, s_assigned, path_constraints, trains, arcs, nn, T, t_s, ns);
+
+        /*cerr << "Initialized!" << endl;
+        for (Path path : paths)
+        {
+            cerr << "Path for train : " << path.get_train() << endl;
+            for (int i : path.get_arcs())
+            {
+                cerr << "Containing arc : " << i << endl;
+            }
+        }*/
 
         int np = paths.size();
         int iter = 0;
@@ -572,11 +608,10 @@ int main(int argc, char *argv[])
         forbidden_arcs.push_back({});
     }
 
-    //TODO START BOUCLE B&P
-    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
-    //END BOUCLE B&P
+    logger.log(INFO, "Starting Branch & Price");
+    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, logger);
 
-    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
+    //DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
     return 0;
    
 //// START  
@@ -735,7 +770,7 @@ int main(int argc, char *argv[])
         master.optimize();
         double continuous_obj = Master_obj.getValue();
 //// END
-        logger.log(INFO, "Obtained continuous objective value: " + to_string(dwresults.continuous_obj));
+        //logger.log(INFO, "Obtained continuous objective value: " + to_string(dwresults.continuous_obj));
         //logger.log(INFO, to_string(dwresults.paths.size() - dwresults.np0 + 1) + " columns generated.");
 
         // Vérifier l'intégralité des lambdas

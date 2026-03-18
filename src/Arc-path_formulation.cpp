@@ -1,5 +1,17 @@
 #include "Arc-path_formulation.h"
 
+bool path_already_exists(vector<Path>& paths, vector<int>& new_arcs, int train_id)
+{
+    for (Path& p : paths)
+    {
+        if (p.get_train() != train_id)
+            continue;
+        if (p.get_arcs() == new_arcs)
+            return true;
+    }
+    return false;
+}
+
 int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths, vector<vector<bool>> &s_assigned, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns)
 {
     int k;        // working train id
@@ -150,6 +162,11 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
 
             if (rcost < -0.001 && !sp.arcs.empty())
             {
+                // WARNING CHECKING DUPLICATES - TO BE INVESTIGATED
+                if (path_already_exists(paths, sp.arcs, k))
+                    continue;
+
+                //cerr << "Reduced cost for train " + to_string(k) << " : " << rcost << endl;
                 t2 = high_resolution_clock::now();
                 cout << "Shortest path duration: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
                 t1 = t2;
