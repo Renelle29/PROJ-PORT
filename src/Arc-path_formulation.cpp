@@ -156,17 +156,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
 
         for (RcspResult &sp : sps)
         {
-<<<<<<< HEAD
             if (sp.cost >= INF) continue;
-=======
-            (*best_rcosts)[k - 1] = rcost;
-        }
-        if (rcost < -0.001 && !sp.arcs.empty())
-        {
-            t2 = high_resolution_clock::now();
-            cout << "Shortest path duration: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
-            t1 = t2;
->>>>>>> ae5f711 (commit pre multiple paths)
 
             double rcost = sp.cost - pi[k - 1];
             best_rcost = min(best_rcost, rcost);
@@ -236,11 +226,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
     return np;
 }
 
-<<<<<<< HEAD
 vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, vector<int> forbidden_arcs, int k_paths)
-=======
-RcspResult shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, int k_paths)
->>>>>>> ae5f711 (commit pre multiple paths)
 {
     int N = static_cast<int>(nodes.size());
     int k = train.get_ID();
