@@ -12,21 +12,42 @@ bool path_already_exists(vector<Path>& paths, vector<int>& new_arcs, int train_i
     return false;
 }
 
-int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths, vector<vector<bool>> &s_assigned, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns)
+int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths, vector<vector<bool>> &s_assigned, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, vector<Path> warm_paths)
 {
     int k;        // working train id
     Path path;    // working path
     int p_id = 1; // path id
     int s_id;     // service id
+    int c_id;
     GRBLinExpr L;
 
+    cerr << "Number of warm paths : " << warm_paths.size() << endl;
     for (Train train : trains) // For each train
     {
         L = 0;
         // Build initial path
         k = train.get_ID();
         s_id = 1;
-        path = Path(p_id, {train.get_dummy()}, arcs[train.get_dummy()].get_cost(k), k, ns);
+
+        Path path;
+        // Check if warm path exists
+        auto warm_it = std::find_if(
+            warm_paths.begin(), warm_paths.end(),
+            [k](const Path &p) { return p.get_train() == k; }
+        );
+
+        if (warm_it != warm_paths.end())
+        {
+            path = *warm_it; // reuse warm path
+        }
+        else
+        {
+            // Create a dummy path if no warm path
+            path = Path(p_id, {train.get_dummy()},
+                        arcs[train.get_dummy()].get_cost(k), k, ns);
+        }
+
+        //path = Path(p_id, {train.get_dummy()}, arcs[train.get_dummy()].get_cost(k), k, ns);
         path.build_GRBVar(master, obj);
         // path.print();
 
@@ -57,6 +78,50 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
         {
             path_constraints.push_back(master.addConstr(0.0, GRB_LESS_EQUAL, 1.0, "Incompatibility " + to_string(p) + " at " + to_string(t))); // build incompatibility constraint for node n
         }
+    }
+
+    int nt = trains.size();
+
+    for (Path& path : warm_paths)
+    {
+        //cerr << "Reusing path : " << path.get_id() << endl;
+        vector<int> arc_ids = path.get_arcs();
+        if (path_already_exists(paths, arc_ids, path.get_train()))
+            continue;
+
+        int k = path.get_train();
+        GRBColumn column = GRBColumn();
+
+        // Train flow constraint
+        c_id = get_constraint_id(k, nt, ns);
+        column.addTerm(1.0, path_constraints[c_id]);
+
+        // Service constraints
+        s_id = 1;
+        for (bool s : s_assigned[k - 1])
+        {
+            if (s)
+            {
+                if (path.get_service(s_id))
+                {
+                    c_id = get_constraint_id(k, s_id, nt, ns);
+                    column.addTerm(1.0, path_constraints[c_id]);
+                }
+            }
+            s_id++;
+        }
+
+        // Incompatibility constraints
+        for (int a_id : path.get_arcs())
+            for (pair<int, int> n : arcs[a_id].get_iNodes())
+            {
+                c_id = get_constraint_id(n.first, n.second, nt, ns, nn, T, t_s);
+                column.addTerm(1.0, path_constraints[c_id]);
+            }
+
+        path.build_GRBVar(master, obj, column);
+        paths.push_back(path);
+        p_id++;
     }
 
     return p_id;
@@ -152,10 +217,11 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
         
 
         vector<RcspResult> sps = shortest_path_algorithm_rcsp(nodes, arcs, nn, trains[k - 1], T, t_s, alpha, forbidden_arcs_k, k_paths);
-        double best_rcost = INF;
+        double best_rcost = 0; // WARNING - changed from INF to 0 for better logging info
 
         for (RcspResult &sp : sps)
         {
+            //cerr << "Train : " << k << " cost : " << sp.cost << endl;
             if (sp.cost >= INF) continue;
 
             double rcost = sp.cost - pi[k - 1];
