@@ -1,6 +1,27 @@
 #include "path_builder.h"
 
-int build_train_apaths(vector<Train> &trains, vector<Path> paths)
+int build_train_apaths(vector<Train> &trains, vector<pair<double,Path>> extended_paths)
+{
+    for (Train &train : trains)
+    {
+        train.clear_Apath();
+    }
+
+    for (auto [lambda, path] : extended_paths)
+    {
+        if (lambda >= 0.999)
+        {
+            trains[path.get_train() - 1].set_Apath(path.get_arcs());
+        }
+        else if (lambda > 0.001)
+        {
+            return path.get_id();
+        }
+    }
+    return 0;
+}
+
+int build_train_apaths_old(vector<Train> &trains, vector<Path> paths)
 {
     for (Train &train : trains)
     {

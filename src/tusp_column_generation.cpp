@@ -30,6 +30,8 @@ using namespace std::chrono;
 
 int best_objective = 1e9;
 vector<Path> best_paths = {};
+vector<pair<double,Path>> best_extended_paths = {};
+int nodes_explored = 0;
 
 static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs);
 
@@ -60,10 +62,19 @@ static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<No
     return partition;
 }
 
-static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int depth=0)
+static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int max_nodes=20, int depth=0)
 {
+    // Check node budget before doing anything
+    if (nodes_explored >= max_nodes)
+    {
+        logger.log(INFO, "Node budget reached ! Nodes explored : " + to_string(nodes_explored));
+        return best_objective;
+    }
+
     logger.log(INFO, "Starting a new DW iteration, depth : " + to_string(depth));
     DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
+    nodes_explored++;
+    logger.log(INFO, "Explored : " + to_string(nodes_explored) + " nodes.");
 
     logger.log(INFO, "Found a continuous objective of : " + to_string(dwresults.continuous_obj));
     // Pruning
@@ -110,9 +121,11 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
             vector<Path> new_paths;
 
             for (auto [lambda, path] : dwresults.extended_paths)
-                new_paths.push_back(path);
+                if (lambda > 1 - 1e-9)  // only keep paths with lambda = 1
+                    new_paths.push_back(path);
             
             best_paths = new_paths;
+            best_extended_paths = dwresults.extended_paths;
         }
         return dwresults.continuous_obj;
     }
@@ -149,9 +162,9 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     int best_obj2 = 1e9;
         
     if (no_dummy1)
-        best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, depth);
+        best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, max_nodes, depth);
     if (no_dummy2)
-        best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, depth);
+        best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, max_nodes, depth);
 
     if (best_obj1 < best_obj2)
         return best_obj1;
@@ -610,6 +623,16 @@ int main(int argc, char *argv[])
     logger.log(INFO, "Starting Branch & Price");
     bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, logger);
 
+    cerr << "Obtained continuous objective value: " + to_string(best_objective) << endl;
+    for (Path& path : best_paths)
+    {
+        cerr << "Path : " << path.get_id() << " used by train : " << path.get_train() << endl;
+    }
+
+    build_train_apaths(trains, best_extended_paths);
+    build_train_npaths(trains, arcs);
+    check_services(trains, services);
+
     //DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
     return 0;
    
@@ -832,7 +855,7 @@ int main(int argc, char *argv[])
         cerr << "Optimality gap: " + to_string(mipGap) << endl;
 
         // 6) Reconstruct and print train paths.
-        build_train_apaths(trains, paths);
+        build_train_apaths_old(trains, paths);
         build_train_npaths(trains, arcs);
         check_services(trains, services);
 
