@@ -33,7 +33,7 @@ vector<Path> best_paths = {};
 vector<pair<double,Path>> best_extended_paths = {};
 int nodes_explored = 0;
 
-static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs);
+static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, vector<Path> warm_paths);
 
 static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<Node> nodes, Path path1, Path path2)
 {
@@ -62,7 +62,7 @@ static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<No
     return partition;
 }
 
-static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int max_nodes=20, int depth=0)
+static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int max_nodes=100, int depth=0, vector<Path> warm_paths = {})
 {
     // Check node budget before doing anything
     if (nodes_explored >= max_nodes)
@@ -72,7 +72,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     }
 
     logger.log(INFO, "Starting a new DW iteration, depth : " + to_string(depth));
-    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
+    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, warm_paths);
     nodes_explored++;
     logger.log(INFO, "Explored : " + to_string(nodes_explored) + " nodes.");
 
@@ -157,16 +157,46 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
         logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for right node");
         forbidden_arcs2[fractional_train-1].push_back(arc_id);
     }
+    
+    auto filter_paths = [&](vector<vector<int>>& forbidden) -> vector<Path>
+    {
+        vector<Path> warm;
+        for (auto [lambda, path] : dwresults.extended_paths)
+        {
+            //if (lambda < 1e-9) continue; // Remove columns with lambda = 0?
+
+            // Only check forbidden arcs for the branched train
+            if (path.get_train() == fractional_train)
+            {
+                bool uses_forbidden = false;
+                for (int arc_id : path.get_arcs())
+                    if (count(forbidden[fractional_train-1].begin(),
+                            forbidden[fractional_train-1].end(), arc_id) != 0)
+                    {
+                        uses_forbidden = true;
+                        break;
+                    }
+                if (uses_forbidden) continue;
+            }
+
+            warm.push_back(path);
+        }
+        return warm;
+    };
 
     // Appels récursifs
     depth++;
     int best_obj1 = 1e9;
     int best_obj2 = 1e9;
         
-    if (no_dummy1)
-        best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, max_nodes, depth);
-    if (no_dummy2)
-        best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, max_nodes, depth);
+    if (no_dummy1){
+        logger.log(INFO, "←←←←←←←←←←←←←←←←← Moving Left");
+        best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, max_nodes, depth, filter_paths(forbidden_arcs1));
+    }
+    if (no_dummy2){
+        logger.log(INFO, "Moving Right →→→→→→→→→→→→→→→→");
+        best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, max_nodes, depth, filter_paths(forbidden_arcs2));
+    }
 
     if (best_obj1 < best_obj2)
         return best_obj1;
@@ -174,7 +204,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     return best_obj2;
 }
 
-static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs)
+static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, vector<Path> warm_paths)
 {
     DWResults results;
 
@@ -199,7 +229,7 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
         vector<GRBConstr> path_constraints;
 
         //debuglogger.log(DEBUG, "Initialize master problem");
-        int np0 = initialize_master_AP(master, Master_obj, paths, s_assigned, path_constraints, trains, arcs, nn, T, t_s, ns);
+        int np0 = initialize_master_AP(master, Master_obj, paths, s_assigned, path_constraints, trains, arcs, nn, T, t_s, ns, warm_paths);
 
         /*cerr << "Initialized!" << endl;
         for (Path path : paths)

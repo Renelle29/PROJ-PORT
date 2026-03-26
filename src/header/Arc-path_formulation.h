@@ -25,7 +25,7 @@ struct RcspResult
 
 bool path_already_exists(vector<Path>& paths, vector<int>& new_arcs, int train_id);
 
-int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths, vector<vector<bool>> &s_assigned, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns);
+int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths, vector<vector<bool>> &s_assigned, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, vector<Path> warm_paths);
 
 int build_dual_vectors(vector<double> &pi, vector<vector<double>> &alpha, vector<vector<double>> &mu, vector<GRBConstr> &path_constraints, int nt, vector<vector<bool>> s_assigned, int nn, int T, int t_s);
 
