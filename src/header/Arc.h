@@ -56,5 +56,6 @@ public:
     double get_r_cost(int k) { return rho[k - 1]; }
     ArcType get_type() { return type; }
     vector<pair<int, int>> get_iNodes() { return iNodes; }
+    int get_ID() { return ID; }
 };
 #endif

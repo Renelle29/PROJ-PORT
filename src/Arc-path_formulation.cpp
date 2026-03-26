@@ -1,5 +1,17 @@
 #include "Arc-path_formulation.h"
 
+bool path_already_exists(vector<Path>& paths, vector<int>& new_arcs, int train_id)
+{
+    for (Path& p : paths)
+    {
+        if (p.get_train() != train_id)
+            continue;
+        if (p.get_arcs() == new_arcs)
+            return true;
+    }
+    return false;
+}
+
 int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths, vector<vector<bool>> &s_assigned, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns)
 {
     int k;        // working train id
@@ -111,7 +123,7 @@ int compute_reduced_cost_network(vector<Arc> &arcs, int nt, vector<vector<double
     return 1;
 }
 
-int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Node> nodes, vector<Arc> arcs, vector<vector<bool>> s_assigned, vector<vector<double>> alpha, vector<double> pi, int nn, int T, int t_s, int ns, vector<double> *best_rcosts)
+int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, vector<GRBConstr> &path_constraints, vector<Train> trains, vector<Node> nodes, vector<Arc> arcs, vector<vector<bool>> s_assigned, vector<vector<double>> alpha, vector<double> pi, int nn, int T, int t_s, int ns, vector<vector<int>> forbidden_arcs, vector<double> *best_rcosts, int k_paths)
 {
     int np = paths.size();
     int nt = trains.size();
@@ -125,76 +137,96 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
     GRBColumn column;
     for (int k = 1; k <= nt; k++)
     {
-        RcspResult sp = shortest_path_algorithm_rcsp(nodes, arcs, nn, trains[k - 1], T, t_s, alpha);
-        if (sp.cost >= INF)
+
+        vector<int> forbidden_arcs_k = forbidden_arcs[k-1];
+
+        // TODO mettre à jour arcs avant algo de plus court chemins
+        // WARNING : Horrible complexité - Deep copy de arcs puis clear
+        // NO IT DOES'NT WORK, BECAUSE THE SHORTEST PATH ACCESS ARCS BY THEIR INDEX, AND THIS WOULD SHIFT ALL ARCS!
+        /*vector<Arc> new_arcs;
+        for (Arc arc : arcs)
         {
-            if (best_rcosts != nullptr)
+            if (count(forbidden_arcs_k.begin(), forbidden_arcs_k.end(), arc.get_ID()) == 0)
+                new_arcs.push_back(arc);
+        }*/
+        
+
+        vector<RcspResult> sps = shortest_path_algorithm_rcsp(nodes, arcs, nn, trains[k - 1], T, t_s, alpha, forbidden_arcs_k, k_paths);
+        double best_rcost = INF;
+
+        for (RcspResult &sp : sps)
+        {
+            if (sp.cost >= INF) continue;
+
+            double rcost = sp.cost - pi[k - 1];
+            best_rcost = min(best_rcost, rcost);
+
+            if (rcost < -0.001 && !sp.arcs.empty())
             {
-                (*best_rcosts)[k - 1] = sp.cost;
-            }
-            continue;
-        }
-        double rcost = sp.cost - pi[k - 1];
-        if (best_rcosts != nullptr)
-        {
-            (*best_rcosts)[k - 1] = rcost;
-        }
-        if (rcost < -0.001 && !sp.arcs.empty())
-        {
-            t2 = high_resolution_clock::now();
-            cout << "Shortest path duration: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
-            t1 = t2;
+                // WARNING CHECKING DUPLICATES - TO BE INVESTIGATED
+                if (path_already_exists(paths, sp.arcs, k))
+                    continue;
 
-            column = GRBColumn();
-            // Build path and path variable
-            path = Path(np + 1, arcs, sp.arcs, k, ns);
-            // path.print();
-            t2 = high_resolution_clock::now();
-            cout << "Build path: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
-            t1 = t2;
+                //cerr << "Reduced cost for train " + to_string(k) << " : " << rcost << endl;
+                t2 = high_resolution_clock::now();
+                //cout << "Shortest path duration: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
+                t1 = t2;
 
-            // Add to train flow constraint
-            c_id = get_constraint_id(k, nt, ns);
-            column.addTerm(1.0, path_constraints[c_id]);
+                column = GRBColumn();
+                // Build path and path variable
+                path = Path(np + 1, arcs, sp.arcs, k, ns);
+                // path.print();
+                t2 = high_resolution_clock::now();
+                //cout << "Build path: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
+                t1 = t2;
 
-            // Add to service constraints
-            s_id = 1;
-            for (bool s : s_assigned[k - 1])
-            {
-                if (s)
+                // Add to train flow constraint
+                c_id = get_constraint_id(k, nt, ns);
+                column.addTerm(1.0, path_constraints[c_id]);
+
+                // Add to service constraints
+                s_id = 1;
+                for (bool s : s_assigned[k - 1])
                 {
-                    if (path.get_service(s_id))
+                    if (s)
                     {
-                        c_id = get_constraint_id(k, s_id, nt, ns);
+                        if (path.get_service(s_id))
+                        {
+                            c_id = get_constraint_id(k, s_id, nt, ns);
+                            column.addTerm(1.0, path_constraints[c_id]);
+                        }
+                    }
+                    s_id++;
+                }
+
+                // Add to incompatibility constraints
+                for (int a_id : path.get_arcs())
+                {
+                    for (pair<int, int> n : arcs[a_id].get_iNodes())
+                    {
+                        c_id = get_constraint_id(n.first, n.second, nt, ns, nn, T, t_s);
                         column.addTerm(1.0, path_constraints[c_id]);
                     }
                 }
-                s_id++;
+
+                t2 = high_resolution_clock::now();
+                //cout << "Add column to constraints: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
+
+                np++;
+                path.build_GRBVar(master, obj, column);
+                paths.push_back(path);
             }
-
-            // Add to incompatibility constraints
-            for (int a_id : path.get_arcs())
-            {
-                for (pair<int, int> n : arcs[a_id].get_iNodes())
-                {
-                    c_id = get_constraint_id(n.first, n.second, nt, ns, nn, T, t_s);
-                    column.addTerm(1.0, path_constraints[c_id]);
-                }
-            }
-
-            t2 = high_resolution_clock::now();
-            cout << "Add column to constraints: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
-
-            np++;
-            path.build_GRBVar(master, obj, column);
-            paths.push_back(path);
+        }
+        if (best_rcosts != nullptr)
+        {
+            (*best_rcosts)[k - 1] = (best_rcost < INF) ? best_rcost : INF;
         }
     }
 
     return np;
 }
 
-RcspResult shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha)
+vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, vector<int> forbidden_arcs, int k_paths)
 {
     int N = static_cast<int>(nodes.size());
     int k = train.get_ID();
@@ -214,49 +246,73 @@ RcspResult shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, in
 
     int mask_count = 1 << static_cast<int>(alpha_bit.size());
     int total_states = N * mask_count;
-    vector<double> dist(total_states, INF);
-    vector<int> prev_state(total_states, -1);
-    vector<int> prev_arc(total_states, -1);
+    
+    vector<vector<double>> dist(total_states, vector<double>(k_paths, INF));
+    vector<vector<int>> prev_state(total_states, vector<int>(k_paths, -1));
+    vector<vector<int>> prev_arc(total_states, vector<int>(k_paths, -1));
+    vector<vector<int>> prev_slot(total_states, vector<int>(k_paths, -1));
 
     auto state_index = [mask_count](int node_id, int mask) { return node_id * mask_count + mask; };
 
-    dist[state_index(0, 0)] = 0.0;
+    dist[state_index(0, 0)][0] = 0.0;
 
     auto relax_from_node = [&](int node_id)
     {
         Node &node = nodes[node_id];
         for (int mask = 0; mask < mask_count; mask++)
         {
-            double d0 = dist[state_index(node_id, mask)];
-            if (d0 >= INF)
+            for (int slot = 0; slot < k_paths; slot++)
             {
-                continue;
-            }
-            for (int a_id : node.getFromArcs())
-            {
-                if (!train.get_arc(a_id))
+                double d0 = dist[state_index(node_id, mask)][slot];
+                if (d0 >= INF)
                 {
                     continue;
                 }
-                int n2 = arcs[a_id].get_to();
-                int new_mask = mask;
-                double d = d0 + arcs[a_id].get_r_cost(k);
-                if (arcs[a_id].get_type() == SERVICE)
+                for (int a_id : node.getFromArcs())
                 {
-                    int s_id = arcs[a_id].get_service();
-                    int bit = service_bit[s_id - 1];
-                    if (bit >= 0 && (mask & (1 << bit)) == 0)
+                    if (!train.get_arc(a_id))
                     {
-                        d -= alpha_bit[bit];
-                        new_mask = mask | (1 << bit);
+                        continue;
                     }
-                }
-                int next_state = state_index(n2, new_mask);
-                if (dist[next_state] > d)
-                {
-                    dist[next_state] = d;
-                    prev_state[next_state] = state_index(node_id, mask);
-                    prev_arc[next_state] = a_id;
+                    if (count(forbidden_arcs.begin(), forbidden_arcs.end(), a_id) != 0)
+                    {
+                        continue;
+                    }    
+                    int n2 = arcs[a_id].get_to();
+                    int new_mask = mask;
+                    double d = d0 + arcs[a_id].get_r_cost(k);
+                    if (arcs[a_id].get_type() == SERVICE)
+                    {
+                        int s_id = arcs[a_id].get_service();
+                        int bit = service_bit[s_id - 1];
+                        if (bit >= 0 && (mask & (1 << bit)) == 0)
+                        {
+                            d -= alpha_bit[bit];
+                            new_mask = mask | (1 << bit);
+                        }
+                    }
+                    int next_state = state_index(n2, new_mask);
+                    
+                    // Chercher le slot le plus mauvais de l'état suivant
+                    int worst_slot = -1;
+                    double worst_val = d;
+                    for (int s = 0; s < k_paths; s++)
+                    {
+                        if (dist[next_state][s] > worst_val)
+                        {
+                            worst_val = dist[next_state][s];
+                            worst_slot = s;
+                        }
+                    }
+
+                    // Si d améliore un des k slots, on met à jour
+                    if (worst_slot >= 0)
+                    {
+                        dist[next_state][worst_slot] = d;
+                        prev_state[next_state][worst_slot] = state_index(node_id, mask);
+                        prev_arc[next_state][worst_slot] = a_id;
+                        prev_slot[next_state][worst_slot] = slot; // on mémorise depuis quel slot on vient
+                    }
                 }
             }
         }
@@ -277,41 +333,55 @@ RcspResult shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, in
         }
     }
 
-    int best_state = -1;
-    double best_cost = INF;
+    // Collecter tous les (coût, état, slot) au nœud destination
+    vector<tuple<double, int, int>> candidates;
     for (int mask = 0; mask < mask_count; mask++)
     {
         int s = state_index(1, mask);
-        if (dist[s] < best_cost)
+        for (int slot = 0; slot < k_paths; slot++)
         {
-            best_cost = dist[s];
-            best_state = s;
+            if (dist[s][slot] < INF)
+                candidates.push_back(make_tuple(dist[s][slot], s, slot));
         }
     }
 
-    RcspResult result;
-    result.cost = best_cost;
-    if (best_state < 0 || best_cost >= INF)
+    // Trier par coût croissant et garder les k meilleurs
+    sort(candidates.begin(), candidates.end());
+    if ((int)candidates.size() > k_paths)
+        candidates.resize(k_paths);
+
+    vector<RcspResult> results;
+    // Si aucun candidat trouvé, retourner un résultat vide
+    if (candidates.empty())
     {
-        return result;
+        results.push_back({INF, {}});
+        return results;
     }
 
-    int cur = best_state;
-    while (cur != state_index(0, 0))
+    for (auto &c : candidates)
     {
-        int a_id = prev_arc[cur];
-        if (a_id < 0)
+        double cost  = get<0>(c);
+        int state    = get<1>(c);
+        int slot     = get<2>(c);
+
+        RcspResult result;
+        result.cost = cost;
+
+        int cur = state;
+        int cur_slot = slot;
+        while (cur != state_index(0, 0))
         {
-            break;
+            int a_id = prev_arc[cur][cur_slot];
+            if (a_id < 0) break;
+            result.arcs.push_back(a_id);
+            int next = prev_state[cur][cur_slot];
+            cur_slot = prev_slot[cur][cur_slot];
+            cur = next;
+            if (cur < 0) break;
         }
-        result.arcs.push_back(a_id);
-        cur = prev_state[cur];
-        if (cur < 0)
-        {
-            break;
-        }
+        results.push_back(result);
     }
-    return result;
+    return results;
 }
 
 int get_constraint_id(int k, int nt, int ns)

@@ -14,7 +14,8 @@
 #include <vector>
 #include <algorithm>
 
-int build_train_apaths(vector<Train> &trains, vector<Path> paths);
+int build_train_apaths(vector<Train> &trains, vector<pair<double,Path>> extended_paths);
+int build_train_apaths_old(vector<Train> &trains, vector<Path> paths);
 
 // Builds each train's node path based on the solution given by the solver and checks if it respects constraints
 int build_train_npaths(vector<Train> &trains, vector<Arc> arcs);

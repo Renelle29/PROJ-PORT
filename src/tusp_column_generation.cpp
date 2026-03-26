@@ -8,6 +8,7 @@
 #include <limits>
 #include <cmath>
 #include <sys/stat.h>
+#include <algorithm>
 
 // Our includes
 #include "input_reader.h"
@@ -22,9 +23,324 @@
 #include "path_builder.h"
 #include "gurobi_c++.h"
 #include "Arc-path_formulation.h"
+#include "DWResults.h"
 
 using namespace std;
 using namespace std::chrono;
+
+int best_objective = 1e9;
+vector<Path> best_paths = {};
+vector<pair<double,Path>> best_extended_paths = {};
+int nodes_explored = 0;
+
+static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs);
+
+static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<Node> nodes, Path path1, Path path2)
+{
+    pair<vector<int>, vector<int>> partition;    
+    vector<int> arc_ids1 = path1.get_arcs();
+    reverse(arc_ids1.begin(), arc_ids1.end());
+    vector<int> arc_ids2 = path2.get_arcs();
+    for (int i : arc_ids1)
+    {
+        if (count(arc_ids2.begin(), arc_ids2.end(), i) == 0)
+        {
+            cerr << "Path1 using arc : " << i << " but not Path2" << endl;
+            int separation_id = arcs[i].get_from();
+            Node node = nodes[separation_id];
+            vector<int> fArcs = node.getFromArcs();
+
+            // TODO improve separation of arcs
+            partition.first = {i};
+            fArcs.erase(std::remove(fArcs.begin(), fArcs.end(), i), fArcs.end());
+            partition.second = fArcs;
+            break;
+        }
+        cerr << "Path1 & Path2 using arc : " << i << endl;
+    }
+
+    return partition;
+}
+
+static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int max_nodes=20, int depth=0)
+{
+    // Check node budget before doing anything
+    if (nodes_explored >= max_nodes)
+    {
+        logger.log(INFO, "Node budget reached ! Nodes explored : " + to_string(nodes_explored));
+        return best_objective;
+    }
+
+    logger.log(INFO, "Starting a new DW iteration, depth : " + to_string(depth));
+    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
+    nodes_explored++;
+    logger.log(INFO, "Explored : " + to_string(nodes_explored) + " nodes.");
+
+    logger.log(INFO, "Found a continuous objective of : " + to_string(dwresults.continuous_obj));
+    // Pruning
+    if (dwresults.continuous_obj >= best_objective)
+    {
+        logger.log(INFO, "Pruning ! Best objective : " + to_string(best_objective));
+        return dwresults.continuous_obj;
+    }
+
+    // Branching - NAIVE FOR NOW - Think about other branching ideas
+
+    int fractional_train = -1;
+    Path path1;
+    Path path2;
+
+    // Trouver train fractionnel et deux chemins fractionels
+    for (auto [lambda, path] : dwresults.extended_paths)
+    {
+
+        if (lambda > 1e-9 && lambda < (1 - 1e-9))
+        {
+            if (fractional_train == -1)
+            {
+                fractional_train = path.get_train();
+                logger.log(INFO, "Found a train with fractional lambdas : " + to_string(fractional_train));
+                path1 = path;
+                logger.log(INFO, "Path 1 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
+            }
+            else if (path.get_train() == fractional_train)
+            {
+                path2 = path;
+                logger.log(INFO, "Path 2 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
+                break;
+            }
+        }
+    }
+
+    cerr << "Fractional train : " << fractional_train << endl;
+    // Si solution entière, sortir de la boucle
+    if (fractional_train == -1)
+    {
+        logger.log(INFO, "Found an integer solution of value : " + to_string(dwresults.continuous_obj));
+        if (dwresults.continuous_obj < best_objective)
+        {
+            best_objective = dwresults.continuous_obj;
+            vector<Path> new_paths;
+
+            for (auto [lambda, path] : dwresults.extended_paths)
+                if (lambda > 1 - 1e-9)  // only keep paths with lambda = 1
+                    new_paths.push_back(path);
+            
+            best_paths = new_paths;
+            best_extended_paths = dwresults.extended_paths;
+        }
+        return dwresults.continuous_obj;
+    }
+
+    // Sinon trouver premier noeud de changement
+    // Partitionner les arcs sortant de ce noeud, et utiliser chaque partition comme forbidden_nodes
+    pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2);
+
+    // Can't forbid dummy paths (as they are used in initialisation)
+    bool no_dummy1 = true;
+    bool no_dummy2 = true;
+
+    vector<vector<int>> forbidden_arcs1 = forbidden_arcs;
+    for (int arc_id : partition.first)
+    {
+        if (arcs[arc_id].get_type() == DUMMY)
+            no_dummy1 = false;
+        logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for left node");
+        forbidden_arcs1[fractional_train-1].push_back(arc_id);
+    }
+
+    vector<vector<int>> forbidden_arcs2 = forbidden_arcs;
+    for (int arc_id : partition.second)
+    {
+        if (arcs[arc_id].get_type() == DUMMY)
+            no_dummy2 = false;
+        logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for right node");
+        forbidden_arcs2[fractional_train-1].push_back(arc_id);
+    }
+
+    // Appels récursifs
+    depth++;
+    int best_obj1 = 1e9;
+    int best_obj2 = 1e9;
+        
+    if (no_dummy1)
+        best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, max_nodes, depth);
+    if (no_dummy2)
+        best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, max_nodes, depth);
+
+    if (best_obj1 < best_obj2)
+        return best_obj1;
+
+    return best_obj2;
+}
+
+static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs)
+{
+    DWResults results;
+
+    //debuglogger.log(DEBUG, "Call Gurobi solver");
+    try
+    {
+        // Gurobi environment (single shared env for master and pricing).
+        GRBEnv env = GRBEnv(true);
+        env.set("LogFile", "mip1.log"); // Gurobi log in working directory.
+        env.set("LogToConsole", "0");
+        env.start();
+
+        // Master problem (restricted) for column generation.
+        //logger.log(INFO, "Solving arc-path model");
+        //debuglogger.log(DEBUG, "--- Build Arc-path problem ---");
+        GRBModel master = GRBModel(env);
+        master.set("JSONSolDetail", "1");
+        GRBLinExpr Master_obj = 0;
+
+        vector<Path> paths;
+        vector<vector<bool>> s_assigned(nt);
+        vector<GRBConstr> path_constraints;
+
+        //debuglogger.log(DEBUG, "Initialize master problem");
+        int np0 = initialize_master_AP(master, Master_obj, paths, s_assigned, path_constraints, trains, arcs, nn, T, t_s, ns);
+
+        /*cerr << "Initialized!" << endl;
+        for (Path path : paths)
+        {
+            cerr << "Path for train : " << path.get_train() << endl;
+            for (int i : path.get_arcs())
+            {
+                cerr << "Containing arc : " << i << endl;
+            }
+        }*/
+
+        int np = paths.size();
+        int iter = 0;
+        auto start_cg = high_resolution_clock::now();
+        string stop_reason;
+
+        cerr << "Starting column generation (arc-path formulation)..." << endl;
+        // 4) Column generation loop:
+        //    - Solve the restricted master problem (RMP) with the current path set.
+        //    - Extract dual multipliers for flow, service, and incompatibility constraints.
+        //    - Build reduced costs on the arc network.
+        //    - Pricing: per-train RCSP shortest path (pricing_algorithm)
+        //    - Add every negative reduced-cost path found to the RMP.
+        //    - Stop when:
+        //        * time budget reached
+        //        * no new column added
+        //        * max_iters reached
+        while (iter < max_iters)
+        {
+            auto iter_start = high_resolution_clock::now();
+            master.setObjective(Master_obj, GRB_MINIMIZE);
+            master.optimize();
+
+            if (master.get(GRB_IntAttr_Status) != 2)
+            {
+                cerr << "Reduced master non optimal" << endl;
+                break;
+            }
+
+            // Debug: report dummy path usage per train in the current RMP solution.
+            vector<double> dummy_lambda(nt, 0.0);
+            for (const Path &path : paths)
+            {
+                const vector<int> arc_ids = path.get_arcs();
+                bool has_dummy = false;
+                for (int a_id : arc_ids)
+                {
+                    if (arcs[a_id].get_type() == DUMMY)
+                    {
+                        has_dummy = true;
+                        break;
+                    }
+                }
+                if (has_dummy)
+                {
+                    int k = path.get_train();
+                    if (k >= 1 && k <= nt)
+                    {
+                        dummy_lambda[k - 1] += path.get_lambda().get(GRB_DoubleAttr_X);
+                    }
+                }
+            }
+
+            // Duals from RMP.
+            vector<double> pi;
+            vector<vector<double>> alpha(ns);
+            vector<vector<double>> mu(nn);
+            build_dual_vectors(pi, alpha, mu, path_constraints, nt, s_assigned, nn, T, t_s);
+            compute_reduced_cost_network(arcs, nt, alpha, mu, t_s, false);
+
+            int before = np;
+            vector<double> best_rcosts(trains.size(), numeric_limits<double>::quiet_NaN());
+            // Per-train shortest path pricing.
+            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, forbidden_arcs, &best_rcosts, k_paths);
+
+            iter++;
+            auto iter_seconds = duration_cast<duration<double>>(high_resolution_clock::now() - iter_start).count();
+            auto elapsed = duration_cast<seconds>(high_resolution_clock::now() - start_cg).count();
+            int new_paths = np - before;
+            double rc_sum = 0.0;
+            int rc_count = 0;
+            for (double rc : best_rcosts)
+            {
+                if (!isnan(rc))
+                {
+                    rc_sum += rc;
+                    rc_count++;
+                }
+            }
+
+            cerr << "Iteration " << iter << " finished: new_paths=" << new_paths
+                 << ", sum_best_reduced_costs=" << fixed << setprecision(6) << rc_sum
+                 << " (sum of best per-train reduced costs over " << rc_count << " trains)" << endl;
+
+            // Stop if time budget is reached or no new column was added.
+            stop_reason.clear();
+            if (elapsed >= time_budget)
+            {
+                stop_reason = "time_budget";
+            }
+            else if (new_paths == 0)
+            {
+                stop_reason = "no_new_columns";
+            }
+            else if (iter >= max_iters)
+            {
+                stop_reason = "max_iters";
+            }
+
+            if (!stop_reason.empty())
+            {
+                break;
+            }
+        }
+        
+        cerr << "Column generation finished after " << iter << " iterations and " << duration_cast<seconds>(high_resolution_clock::now() - start_cg).count() << " seconds." << endl;
+        cerr << "Final solve of the restricted master problem solved with " << paths.size() << " columns." << endl;
+
+        master.setObjective(Master_obj, GRB_MINIMIZE);
+        master.update();
+        master.optimize();
+        double continuous_obj = Master_obj.getValue();
+        cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
+
+        results.continuous_obj = continuous_obj;
+        
+        vector<pair<double,Path>> extended_paths;
+        for (Path path : paths)
+        {
+            extended_paths.push_back(make_pair(path.get_lambda().get(GRB_DoubleAttr_X), path));
+        }
+        results.extended_paths = extended_paths;
+        
+        results.np0 = np0;
+    }
+    catch (...){
+        cerr << "On a été dans le catch, c'est pas cool, j'pense y a un problème :'( bonne chance thierry & bruno !" << endl;
+    }
+
+    return results;
+}
 
 // Simple CLI helper: detect numeric strings (optional sign, optional decimal).
 static bool is_number(const string &s)
@@ -90,13 +406,14 @@ static void ensure_dir(const string &path)
 int main(int argc, char *argv[])
 {
     // CLI:
-    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds]
+    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths]
     if (argc < 3)
     {
         cerr << "Usage: tusp_solver \"<station name>\" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds]" << endl;
         return 1;
     }
 
+    bool verbose = true;
     string station = argv[1];
     string scenario = argv[2];
 
@@ -104,6 +421,7 @@ int main(int argc, char *argv[])
     int time_budget = 7200; // column generation time budget
     int max_iters = 1000;
     double time_budget_binary = 0.0; // 0 means no time limit for final binary master (integer solve)
+    int k_paths = 1;
 
     vector<double> numeric_args;
     for (int i = 3; i < argc; i++)
@@ -124,6 +442,10 @@ int main(int argc, char *argv[])
     if (numeric_args.size() > 2)
     {
         time_budget_binary = numeric_args[2];
+    }
+    if (numeric_args.size() > 3)
+    {
+        k_paths = static_cast<int>(numeric_args[3]);
     }
 
     // Runtime logs are written to files in the working directory.
@@ -241,7 +563,7 @@ int main(int argc, char *argv[])
     // 2) Compute time step and build the time-space network.
     t_s = compute_time_step(trains, services, train_types, plinks);
     logger.log(INFO, "Time step is worth: " + to_string(t_s));
-
+    logger.log(INFO, "Time horizon is worth: " + to_string(T));
 
     debuglogger.log(DEBUG, "Build Time-space network nodes");
     int N = build_nodes(nodes, nn, T, t_s);
@@ -262,6 +584,19 @@ int main(int argc, char *argv[])
         }
     }
     debuglogger.log(DEBUG, "All arcs built");
+
+    if (verbose){
+        /*for (Node node : nodes){
+            logger.log(INFO, "Built node : ID - " + to_string(node.getPNode()) + " TIME - " + to_string(node.getTime()));
+        }*/
+        /*for (Arc arc : arcs){
+            logger.log(INFO, "Built arc : FROM - " + to_string(arc.get_from()) + " TO - " + to_string(arc.get_to()) + " SERVICE - " + to_string(arc.get_service()) + " TYPE - " + to_string(arc.get_type()));
+        }*/
+        for (Train train : trains){
+            logger.log(INFO, "Train : ID - " + to_string(train.get_ID()) + " NAME - " + train.get_name() + " TYPE - " + to_string(train.get_type()) + " ARRIVAL - " + to_string(train.get_a_t()) + " DEPARTURE - " + to_string(train.get_d_t()));
+        }
+    }
+
     cerr << "Constructed three-layer time-space network (nodes + arcs)." << endl;
 
     // Prepare pricing report files (headers depend on train count).
@@ -280,8 +615,56 @@ int main(int argc, char *argv[])
         }
         iter_pricing_trains << endl;
     }
+    
+    vector<vector<int>> forbidden_arcs;
+    for (const Train &train : trains)
+    {
+        forbidden_arcs.push_back({});
+    }
 
-    // 3) Solve with column generation (arc-path formulation).
+    logger.log(INFO, "Starting Branch & Price");
+    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, logger);
+
+    cerr << "Obtained continuous objective value: " + to_string(best_objective) << endl;
+    for (Path& path : best_paths)
+    {
+        cerr << "Path : " << path.get_id() << " used by train : " << path.get_train() << endl;
+    }
+
+    build_train_apaths(trains, best_extended_paths);
+    build_train_npaths(trains, arcs);
+    check_services(trains, services);
+
+    cout << "---- Binary solution ----" << endl;
+    for (auto [lambda, path] : best_extended_paths)
+    {
+        if (lambda > 0.0)
+        {
+            cout << "Lambda value: " << lambda << endl;
+            cout << "Path ID: " << path.get_id() << endl;
+            cout << "---------" << endl;
+            // path.print();
+        }
+    }
+
+    cout << "--- arc-path ---" << endl;
+    for (Train train : trains)
+    {
+        print_path(train, nodes, pNodes, services);
+        if (train.get_Apath().size() <= 1)
+        {
+            logger.log(INFO, "Dummy path was taken by train " + to_string(train.get_ID()));
+        }
+    }
+
+    //DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
+    return 0;
+}
+   
+/* LEGACY = Old code
+
+//// START  
+// 3) Solve with column generation (arc-path formulation).
     debuglogger.log(DEBUG, "Call Gurobi solver");
     try
     {
@@ -367,7 +750,7 @@ int main(int argc, char *argv[])
             int before = np;
             vector<double> best_rcosts(trains.size(), numeric_limits<double>::quiet_NaN());
             // Per-train shortest path pricing.
-            np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts);
+            //np = pricing_algorithm(paths, master, Master_obj, path_constraints, trains, nodes, arcs, s_assigned, alpha, pi, nn, T, t_s, ns, &best_rcosts, k_paths);
 
             iter++;
             auto iter_seconds = duration_cast<duration<double>>(high_resolution_clock::now() - iter_start).count();
@@ -425,6 +808,7 @@ int main(int argc, char *argv[])
             }
         }
 
+
         cerr << "Column generation finished after " << iter << " iterations and " << duration_cast<seconds>(high_resolution_clock::now() - start_cg).count() << " seconds." << endl;
 
         cerr << "Final solve of the restricted master problem solved with " << paths.size() << " columns." << endl;
@@ -434,8 +818,30 @@ int main(int argc, char *argv[])
         master.update();
         master.optimize();
         double continuous_obj = Master_obj.getValue();
-        logger.log(INFO, "Obtained continuous objective value: " + to_string(continuous_obj));
-        logger.log(INFO, to_string(paths.size() - np0 + 1) + " columns generated.");
+//// END
+        //logger.log(INFO, "Obtained continuous objective value: " + to_string(dwresults.continuous_obj));
+        //logger.log(INFO, to_string(dwresults.paths.size() - dwresults.np0 + 1) + " columns generated.");
+
+        // Vérifier l'intégralité des lambdas
+        bool is_integer = true;
+        int nb_paths = 0;
+        int zero_paths = 0;
+        for (Path &path : paths) {
+            nb_paths++;
+            double lambda_val = path.get_lambda().get(GRB_DoubleAttr_X);
+            if (lambda_val > 0.001) { // Afficher seulement les non-nulles
+                logger.log(INFO, "Path " + to_string(path.get_id()) + 
+                        " train " + to_string(path.get_train()) + 
+                        " lambda = " + to_string(lambda_val));
+                if (lambda_val > 0.001 && lambda_val < 0.999)
+                    is_integer = false;
+            }
+            else{
+                zero_paths++;
+            }
+        }
+        logger.log(INFO, is_integer ? "Solution is integer!" : "Solution is fractional");
+        logger.log(INFO, "There are " + to_string(zero_paths) + " unused paths over " + to_string(nb_paths) + " paths.");
 
         cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
 
@@ -476,7 +882,7 @@ int main(int argc, char *argv[])
         cerr << "Optimality gap: " + to_string(mipGap) << endl;
 
         // 6) Reconstruct and print train paths.
-        build_train_apaths(trains, paths);
+        build_train_apaths_old(trains, paths);
         build_train_npaths(trains, arcs);
         check_services(trains, services);
 
@@ -569,4 +975,4 @@ int main(int argc, char *argv[])
 
     logger.log(INFO, "Program finished running");
     return 0;
-}
+*/
