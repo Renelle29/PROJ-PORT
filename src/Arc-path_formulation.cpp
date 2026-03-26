@@ -142,15 +142,16 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
 
         // TODO mettre à jour arcs avant algo de plus court chemins
         // WARNING : Horrible complexité - Deep copy de arcs puis clear
-        vector<Arc> new_arcs;
+        // NO IT DOES'NT WORK, BECAUSE THE SHORTEST PATH ACCESS ARCS BY THEIR INDEX, AND THIS WOULD SHIFT ALL ARCS!
+        /*vector<Arc> new_arcs;
         for (Arc arc : arcs)
         {
             if (count(forbidden_arcs_k.begin(), forbidden_arcs_k.end(), arc.get_ID()) == 0)
                 new_arcs.push_back(arc);
-        }
+        }*/
         
 
-        vector<RcspResult> sps = shortest_path_algorithm_rcsp(nodes, new_arcs, nn, trains[k - 1], T, t_s, alpha, k_paths);
+        vector<RcspResult> sps = shortest_path_algorithm_rcsp(nodes, arcs, nn, trains[k - 1], T, t_s, alpha, forbidden_arcs_k, k_paths);
         double best_rcost = INF;
 
         for (RcspResult &sp : sps)
@@ -225,7 +226,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
     return np;
 }
 
-vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, int k_paths)
+vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, vector<int> forbidden_arcs, int k_paths)
 {
     int N = static_cast<int>(nodes.size());
     int k = train.get_ID();
@@ -273,6 +274,10 @@ vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> 
                     {
                         continue;
                     }
+                    if (count(forbidden_arcs.begin(), forbidden_arcs.end(), a_id) != 0)
+                    {
+                        continue;
+                    }    
                     int n2 = arcs[a_id].get_to();
                     int new_mask = mask;
                     double d = d0 + arcs[a_id].get_r_cost(k);

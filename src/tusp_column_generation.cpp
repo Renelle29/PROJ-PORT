@@ -33,7 +33,6 @@ vector<Path> best_paths = {};
 
 static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs);
 
-// TODO
 static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<Node> nodes, Path path1, Path path2)
 {
     pair<vector<int>, vector<int>> partition;    
@@ -150,9 +149,9 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     int best_obj2 = 1e9;
         
     if (no_dummy1)
-        int best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, depth);
+        best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, depth);
     if (no_dummy2)
-        int best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, depth);
+        best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, depth);
 
     if (best_obj1 < best_obj2)
         return best_obj1;
