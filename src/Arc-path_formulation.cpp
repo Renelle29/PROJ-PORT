@@ -169,7 +169,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
 
                 //cerr << "Reduced cost for train " + to_string(k) << " : " << rcost << endl;
                 t2 = high_resolution_clock::now();
-                cout << "Shortest path duration: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
+                //cout << "Shortest path duration: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
                 t1 = t2;
 
                 column = GRBColumn();
@@ -177,7 +177,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
                 path = Path(np + 1, arcs, sp.arcs, k, ns);
                 // path.print();
                 t2 = high_resolution_clock::now();
-                cout << "Build path: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
+                //cout << "Build path: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
                 t1 = t2;
 
                 // Add to train flow constraint
@@ -210,7 +210,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
                 }
 
                 t2 = high_resolution_clock::now();
-                cout << "Add column to constraints: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
+                //cout << "Add column to constraints: " << duration_cast<seconds>(t2 - t1).count() << " seconds." << endl;
 
                 np++;
                 path.build_GRBVar(master, obj, column);

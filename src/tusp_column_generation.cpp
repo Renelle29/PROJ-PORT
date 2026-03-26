@@ -95,6 +95,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     {
 
         if (lambda > 1e-9 && lambda < (1 - 1e-9))
+        {
             if (fractional_train == -1)
             {
                 fractional_train = path.get_train();
@@ -108,6 +109,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
                 logger.log(INFO, "Path 2 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
                 break;
             }
+        }
     }
 
     cerr << "Fractional train : " << fractional_train << endl;
@@ -633,9 +635,34 @@ int main(int argc, char *argv[])
     build_train_npaths(trains, arcs);
     check_services(trains, services);
 
+    cout << "---- Binary solution ----" << endl;
+    for (auto [lambda, path] : best_extended_paths)
+    {
+        if (lambda > 0.0)
+        {
+            cout << "Lambda value: " << lambda << endl;
+            cout << "Path ID: " << path.get_id() << endl;
+            cout << "---------" << endl;
+            // path.print();
+        }
+    }
+
+    cout << "--- arc-path ---" << endl;
+    for (Train train : trains)
+    {
+        print_path(train, nodes, pNodes, services);
+        if (train.get_Apath().size() <= 1)
+        {
+            logger.log(INFO, "Dummy path was taken by train " + to_string(train.get_ID()));
+        }
+    }
+
     //DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs);
     return 0;
+}
    
+/* LEGACY = Old code
+
 //// START  
 // 3) Solve with column generation (arc-path formulation).
     debuglogger.log(DEBUG, "Call Gurobi solver");
@@ -948,4 +975,4 @@ int main(int argc, char *argv[])
 
     logger.log(INFO, "Program finished running");
     return 0;
-}
+*/
