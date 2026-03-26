@@ -137,14 +137,10 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2);
 
     // Can't forbid dummy paths (as they are used in initialisation)
-    bool no_dummy1 = true;
-    bool no_dummy2 = true;
 
     vector<vector<int>> forbidden_arcs1 = forbidden_arcs;
     for (int arc_id : partition.first)
     {
-        if (arcs[arc_id].get_type() == DUMMY)
-            no_dummy1 = false;
         logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for left node");
         forbidden_arcs1[fractional_train-1].push_back(arc_id);
     }
@@ -152,8 +148,6 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     vector<vector<int>> forbidden_arcs2 = forbidden_arcs;
     for (int arc_id : partition.second)
     {
-        if (arcs[arc_id].get_type() == DUMMY)
-            no_dummy2 = false;
         logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for right node");
         forbidden_arcs2[fractional_train-1].push_back(arc_id);
     }
@@ -188,15 +182,12 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     depth++;
     int best_obj1 = 1e9;
     int best_obj2 = 1e9;
-        
-    if (no_dummy1){
-        logger.log(INFO, "←←←←←←←←←←←←←←←←← Moving Left");
-        best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, max_nodes, depth, filter_paths(forbidden_arcs1));
-    }
-    if (no_dummy2){
-        logger.log(INFO, "Moving Right →→→→→→→→→→→→→→→→");
-        best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, max_nodes, depth, filter_paths(forbidden_arcs2));
-    }
+
+    logger.log(INFO, "←←←←←←←←←←←←←←←←← Moving Left");
+    best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, max_nodes, depth, filter_paths(forbidden_arcs1));
+    
+    logger.log(INFO, "Moving Right →→→→→→→→→→→→→→→→");
+    best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, max_nodes, depth, filter_paths(forbidden_arcs2));
 
     if (best_obj1 < best_obj2)
         return best_obj1;

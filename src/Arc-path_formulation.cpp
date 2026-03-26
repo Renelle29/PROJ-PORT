@@ -21,13 +21,33 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
     int c_id;
     GRBLinExpr L;
 
+    cerr << "Number of warm paths : " << warm_paths.size() << endl;
     for (Train train : trains) // For each train
     {
         L = 0;
         // Build initial path
         k = train.get_ID();
         s_id = 1;
-        path = Path(p_id, {train.get_dummy()}, arcs[train.get_dummy()].get_cost(k), k, ns);
+
+        Path path;
+        // Check if warm path exists
+        auto warm_it = std::find_if(
+            warm_paths.begin(), warm_paths.end(),
+            [k](const Path &p) { return p.get_train() == k; }
+        );
+
+        if (warm_it != warm_paths.end())
+        {
+            path = *warm_it; // reuse warm path
+        }
+        else
+        {
+            // Create a dummy path if no warm path
+            path = Path(p_id, {train.get_dummy()},
+                        arcs[train.get_dummy()].get_cost(k), k, ns);
+        }
+
+        //path = Path(p_id, {train.get_dummy()}, arcs[train.get_dummy()].get_cost(k), k, ns);
         path.build_GRBVar(master, obj);
         // path.print();
 
