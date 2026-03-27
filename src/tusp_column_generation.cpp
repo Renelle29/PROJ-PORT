@@ -31,7 +31,13 @@ using namespace std::chrono;
 int best_objective = 1e9;
 vector<Path> best_paths = {};
 vector<pair<double,Path>> best_extended_paths = {};
-int nodes_explored = 0;
+
+struct BandPNode {
+    vector<vector<int>> forbidden_arcs;
+    double prev_obj;
+    vector<Path> warm_paths = {};
+    int depth;
+};
 
 static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, vector<Path> warm_paths);
 
@@ -88,137 +94,209 @@ static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<No
     return partition;
 }
 
-static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int sep_heuristic, int max_nodes=100, int depth=0, vector<Path> warm_paths = {})
+BandPNode select_and_remove_node(std::vector<BandPNode>& nodes, int mode)
 {
-    // Check node budget before doing anything
-    if (nodes_explored >= max_nodes)
-    {
-        logger.log(INFO, "Node budget reached ! Nodes explored : " + to_string(nodes_explored));
-        return best_objective;
+    if (nodes.empty()) {
+        throw std::runtime_error("No nodes to explore");
     }
 
-    logger.log(INFO, "Starting a new DW iteration, depth : " + to_string(depth));
-    DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, warm_paths);
-    nodes_explored++;
-    logger.log(INFO, "Explored : " + to_string(nodes_explored) + " nodes.");
+    // Trouver l'index du bon noeud
+    int best_index = 0;
 
-    logger.log(INFO, "Found a continuous objective of : " + to_string(dwresults.continuous_obj));
-    // Pruning
-    if (dwresults.continuous_obj >= best_objective)
+    for (int i = 1; i < nodes.size(); ++i)
     {
-        logger.log(INFO, "Pruning ! Best objective : " + to_string(best_objective));
-        return dwresults.continuous_obj;
-    }
-
-    // Branching - NAIVE FOR NOW - Think about other branching ideas
-
-    int fractional_train = -1;
-    Path path1;
-    Path path2;
-
-    // Trouver train fractionnel et deux chemins fractionels
-    for (auto [lambda, path] : dwresults.extended_paths)
-    {
-
-        if (lambda > 1e-9 && lambda < (1 - 1e-9))
+        if (mode == 0) //DFS
         {
-            if (fractional_train == -1)
-            {
-                fractional_train = path.get_train();
-                logger.log(INFO, "Found a train with fractional lambdas : " + to_string(fractional_train));
-                path1 = path;
-                logger.log(INFO, "Path 1 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
-            }
-            else if (path.get_train() == fractional_train)
-            {
-                path2 = path;
-                logger.log(INFO, "Path 2 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
-                break;
-            }
+            // profondeur max
+            if (nodes[i].depth > nodes[best_index].depth)
+                best_index = i;
+        }
+        else // BFS
+        {
+            // profondeur min
+            if (nodes[i].depth < nodes[best_index].depth)
+                best_index = i;
         }
     }
 
-    cerr << "Fractional train : " << fractional_train << endl;
-    // Si solution entière, sortir de la boucle
-    if (fractional_train == -1)
-    {
-        logger.log(INFO, "Found an integer solution of value : " + to_string(dwresults.continuous_obj));
-        if (dwresults.continuous_obj < best_objective)
-        {
-            best_objective = dwresults.continuous_obj;
-            vector<Path> new_paths;
+    // Récupérer le noeud
+    BandPNode selected = nodes[best_index];
 
-            for (auto [lambda, path] : dwresults.extended_paths)
-                if (lambda > 1 - 1e-9)  // only keep paths with lambda = 1
-                    new_paths.push_back(path);
-            
-            best_paths = new_paths;
-            best_extended_paths = dwresults.extended_paths;
-        }
-        return dwresults.continuous_obj;
-    }
+    // Supprimer efficacement (sans préserver l'ordre)
+    nodes[best_index] = nodes.back();
+    nodes.pop_back();
 
-    // Sinon trouver premier noeud de changement
-    // Partitionner les arcs sortant de ce noeud, et utiliser chaque partition comme forbidden_nodes
-    pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2, sep_heuristic);
+    return selected;
+}
 
-    // Can't forbid dummy paths (as they are used in initialisation)
-
-    vector<vector<int>> forbidden_arcs1 = forbidden_arcs;
-    for (int arc_id : partition.first)
-    {
-        logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for left node");
-        forbidden_arcs1[fractional_train-1].push_back(arc_id);
-    }
-
-    vector<vector<int>> forbidden_arcs2 = forbidden_arcs;
-    for (int arc_id : partition.second)
-    {
-        logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for right node");
-        forbidden_arcs2[fractional_train-1].push_back(arc_id);
-    }
+static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, Logger& logger, int sep_heuristic, int max_nodes=100)
+{
+    vector<BandPNode> nodes_to_explore = {};
     
-    auto filter_paths = [&](vector<vector<int>>& forbidden) -> vector<Path>
+    // Create the root
+    BandPNode initial_node;
+        
+    vector<vector<int>> forbidden_arcs;
+    for (const Train &train : trains)
     {
-        vector<Path> warm;
+        forbidden_arcs.push_back({});
+    }
+
+    initial_node.forbidden_arcs = forbidden_arcs;
+    initial_node.prev_obj = 0;
+    initial_node.warm_paths = {};
+    initial_node.depth = 0;
+
+    // Append the node to the list of nodes
+    nodes_to_explore.push_back(initial_node);
+
+    // Go through all nodes to explore
+    int nodes_explored = 0;
+    
+    while (!nodes_to_explore.empty() && nodes_explored <= max_nodes)
+    {
+        // TODO - function to decide which node to explore
+        BandPNode current_node;
+        if (best_objective > 1e9 - 1)
+            current_node = select_and_remove_node(nodes_to_explore, 0); // 0 = DFS, 1 = BFS
+        else
+            current_node = select_and_remove_node(nodes_to_explore, 1); // 0 = DFS, 1 = BFS
+
+        // Pruning if parent was worth
+        if (current_node.prev_obj >= best_objective)
+        {
+            logger.log(INFO, "Pruning ! Best objective : " + to_string(best_objective));
+            continue;
+        }
+
+        logger.log(INFO, "Starting a new DW iteration, depth : " + to_string(current_node.depth));
+        DWResults dwresults = dw(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, current_node.forbidden_arcs, current_node.warm_paths);
+        nodes_explored++;
+        logger.log(INFO, "Explored : " + to_string(nodes_explored) + " nodes.");
+
+        logger.log(INFO, "Found a continuous objective of : " + to_string(dwresults.continuous_obj));
+
+        // Pruning
+        if (dwresults.continuous_obj >= best_objective)
+        {
+            logger.log(INFO, "Pruning ! Best objective : " + to_string(best_objective));
+            continue;
+        }
+
+        // TODO - Branching - NAIVE FOR NOW - Think about other branching ideas
+
+        int fractional_train = -1;
+        Path path1;
+        Path path2;
+
+        // Find a train, and two fractional paths for it
         for (auto [lambda, path] : dwresults.extended_paths)
         {
-            //if (lambda < 1e-9) continue; // Remove columns with lambda = 0?
 
-            // Only check forbidden arcs for the branched train
-            if (path.get_train() == fractional_train)
+            if (lambda > 1e-9 && lambda < (1 - 1e-9))
             {
-                bool uses_forbidden = false;
-                for (int arc_id : path.get_arcs())
-                    if (count(forbidden[fractional_train-1].begin(),
-                            forbidden[fractional_train-1].end(), arc_id) != 0)
-                    {
-                        uses_forbidden = true;
-                        break;
-                    }
-                if (uses_forbidden) continue;
+                if (fractional_train == -1)
+                {
+                    fractional_train = path.get_train();
+                    logger.log(INFO, "Found a train with fractional lambdas : " + to_string(fractional_train));
+                    path1 = path;
+                    logger.log(INFO, "Path 1 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
+                }
+                else if (path.get_train() == fractional_train)
+                {
+                    path2 = path;
+                    logger.log(INFO, "Path 2 : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
+                    break;
+                }
             }
-
-            warm.push_back(path);
         }
-        return warm;
-    };
+        cerr << "Fractional train : " << fractional_train << endl;
 
-    // Appels récursifs
-    depth++;
-    int best_obj1 = 1e9;
-    int best_obj2 = 1e9;
+        // If integer solution, update best_objective & continue
+        if (fractional_train == -1)
+        {
+            logger.log(INFO, "Found an integer solution of value : " + to_string(dwresults.continuous_obj));
+            if (dwresults.continuous_obj < best_objective)
+            {
+                best_objective = dwresults.continuous_obj;
+                vector<Path> new_paths;
 
-    logger.log(INFO, "←←←←←←←←←←←←←←←←← Moving Left");
-    best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, sep_heuristic, max_nodes, depth, filter_paths(forbidden_arcs1));
-    
-    logger.log(INFO, "Moving Right →→→→→→→→→→→→→→→→");
-    best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, sep_heuristic, max_nodes, depth, filter_paths(forbidden_arcs2));
+                for (auto [lambda, path] : dwresults.extended_paths)
+                    if (lambda > 1 - 1e-9)  // only keep paths with lambda = 1
+                        new_paths.push_back(path);
+                
+                best_paths = new_paths;
+                best_extended_paths = dwresults.extended_paths;
+            }
+            continue;
+        }
 
-    if (best_obj1 < best_obj2)
-        return best_obj1;
+        // Find first separation node and get a partition of outbound arcs
+        pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2, sep_heuristic);
 
-    return best_obj2;
+        // Update forbidden paths for left & right nodes
+        vector<vector<int>> forbidden_arcs1 = current_node.forbidden_arcs;
+        for (int arc_id : partition.first)
+        {
+            logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for left node");
+            forbidden_arcs1[fractional_train-1].push_back(arc_id);
+        }
+
+        vector<vector<int>> forbidden_arcs2 = current_node.forbidden_arcs;
+        for (int arc_id : partition.second)
+        {
+            logger.log(INFO, "Arc : " + to_string(arc_id) + " for train : " + to_string(fractional_train) + " forbidden for right node");
+            forbidden_arcs2[fractional_train-1].push_back(arc_id);
+        }
+
+        // Anon function to filter warm paths (avoiding the ones using forbidden arcs)
+        auto filter_paths = [&](vector<vector<int>>& forbidden) -> vector<Path>
+        {
+            vector<Path> warm;
+            for (auto [lambda, path] : dwresults.extended_paths)
+            {
+                //if (lambda < 1e-9) continue; // Remove columns with lambda = 0?
+
+                // Only check forbidden arcs for the branched train
+                if (path.get_train() == fractional_train)
+                {
+                    bool uses_forbidden = false;
+                    for (int arc_id : path.get_arcs())
+                        if (count(forbidden[fractional_train-1].begin(),
+                                forbidden[fractional_train-1].end(), arc_id) != 0)
+                        {
+                            uses_forbidden = true;
+                            break;
+                        }
+                    if (uses_forbidden) continue;
+                }
+
+                warm.push_back(path);
+            }
+            return warm;
+        };
+
+        // Create new nodes & add to list
+        BandPNode left_node;
+        BandPNode right_node;
+
+        left_node.forbidden_arcs = forbidden_arcs1;
+        right_node.forbidden_arcs = forbidden_arcs2;
+
+        left_node.prev_obj = dwresults.continuous_obj;
+        right_node.prev_obj = dwresults.continuous_obj;
+
+        left_node.warm_paths = filter_paths(forbidden_arcs1);
+        right_node.warm_paths = filter_paths(forbidden_arcs2);
+
+        left_node.depth = current_node.depth + 1;
+        right_node.depth = current_node.depth + 1;
+
+        nodes_to_explore.push_back(left_node);
+        nodes_to_explore.push_back(right_node);
+    }
+
+    return best_objective;
 }
 
 static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, vector<Path> warm_paths)
@@ -667,15 +745,9 @@ int main(int argc, char *argv[])
         }
         iter_pricing_trains << endl;
     }
-    
-    vector<vector<int>> forbidden_arcs;
-    for (const Train &train : trains)
-    {
-        forbidden_arcs.push_back({});
-    }
 
     logger.log(INFO, "Starting Branch & Price");
-    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, logger, sep_heuristic);
+    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, logger, sep_heuristic);
 
     cerr << "Obtained continuous objective value: " + to_string(best_objective) << endl;
     for (Path& path : best_paths)
