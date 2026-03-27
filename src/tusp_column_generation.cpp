@@ -35,25 +35,51 @@ int nodes_explored = 0;
 
 static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, vector<Path> warm_paths);
 
-static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<Node> nodes, Path path1, Path path2)
+static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<Node> nodes, Path path1, Path path2, int heuristic = 1)
 {
     pair<vector<int>, vector<int>> partition;    
     vector<int> arc_ids1 = path1.get_arcs();
     reverse(arc_ids1.begin(), arc_ids1.end());
     vector<int> arc_ids2 = path2.get_arcs();
-    for (int i : arc_ids1)
+    reverse(arc_ids2.begin(), arc_ids2.end());
+    for (int i = 0; i < arc_ids1.size() ; i++)
     {
-        if (count(arc_ids2.begin(), arc_ids2.end(), i) == 0)
+        if (arc_ids1[i] != arc_ids2[i])
         {
             cerr << "Path1 using arc : " << i << " but not Path2" << endl;
-            int separation_id = arcs[i].get_from();
+            int separation_id = arcs[arc_ids1[i]].get_from();
             Node node = nodes[separation_id];
             vector<int> fArcs = node.getFromArcs();
 
             // TODO improve separation of arcs
-            partition.first = {i};
-            fArcs.erase(std::remove(fArcs.begin(), fArcs.end(), i), fArcs.end());
-            partition.second = fArcs;
+            partition.first = {arc_ids1[i]};
+            partition.second = {arc_ids2[i]};
+            fArcs.erase(std::remove(fArcs.begin(), fArcs.end(), arc_ids1[i]), fArcs.end());
+            fArcs.erase(std::remove(fArcs.begin(), fArcs.end(), arc_ids2[i]), fArcs.end());
+            
+            if (heuristic == 1)
+            {
+                for (int j = 0; j < fArcs.size(); j++)
+                {
+                    partition.second.push_back(fArcs[j]);
+                }
+            }
+            else if (heuristic == 2)
+            {
+                for (int j = 0; j < fArcs.size(); j++)
+                {
+                    partition.first.push_back(fArcs[j]);
+                }
+            }
+            else if (heuristic == 3){
+                for (int j = 0; j < fArcs.size(); j++)
+                {
+                    if (j%2 == 0)
+                        partition.first.push_back(fArcs[j]);
+                    else
+                        partition.second.push_back(fArcs[j]);
+                }
+            }
             break;
         }
         cerr << "Path1 & Path2 using arc : " << i << endl;
@@ -62,7 +88,7 @@ static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<No
     return partition;
 }
 
-static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int max_nodes=100, int depth=0, vector<Path> warm_paths = {})
+static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, Logger& logger, int sep_heuristic, int max_nodes=100, int depth=0, vector<Path> warm_paths = {})
 {
     // Check node budget before doing anything
     if (nodes_explored >= max_nodes)
@@ -134,7 +160,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
 
     // Sinon trouver premier noeud de changement
     // Partitionner les arcs sortant de ce noeud, et utiliser chaque partition comme forbidden_nodes
-    pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2);
+    pair<vector<int>, vector<int>> partition = partition_arcs(arcs, nodes, path1, path2, sep_heuristic);
 
     // Can't forbid dummy paths (as they are used in initialisation)
 
@@ -184,10 +210,10 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     int best_obj2 = 1e9;
 
     logger.log(INFO, "←←←←←←←←←←←←←←←←← Moving Left");
-    best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, max_nodes, depth, filter_paths(forbidden_arcs1));
+    best_obj1 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs1, logger, sep_heuristic, max_nodes, depth, filter_paths(forbidden_arcs1));
     
     logger.log(INFO, "Moving Right →→→→→→→→→→→→→→→→");
-    best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, max_nodes, depth, filter_paths(forbidden_arcs2));
+    best_obj2 = bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs2, logger, sep_heuristic, max_nodes, depth, filter_paths(forbidden_arcs2));
 
     if (best_obj1 < best_obj2)
         return best_obj1;
@@ -427,10 +453,10 @@ static void ensure_dir(const string &path)
 int main(int argc, char *argv[])
 {
     // CLI:
-    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths]
-    if (argc < 3)
+    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths] [sep_heuristic]
+    if (argc < 8)
     {
-        cerr << "Usage: tusp_solver \"<station name>\" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds]" << endl;
+        cerr << "Usage: tusp_solver \"<station name>\" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths] [sep_heuristic]" << endl;
         return 1;
     }
 
@@ -443,6 +469,7 @@ int main(int argc, char *argv[])
     int max_iters = 1000;
     double time_budget_binary = 0.0; // 0 means no time limit for final binary master (integer solve)
     int k_paths = 1;
+    int sep_heuristic = 1;
 
     vector<double> numeric_args;
     for (int i = 3; i < argc; i++)
@@ -467,6 +494,10 @@ int main(int argc, char *argv[])
     if (numeric_args.size() > 3)
     {
         k_paths = static_cast<int>(numeric_args[3]);
+    }
+    if (numeric_args.size() > 4)
+    {
+        sep_heuristic = static_cast<int>(numeric_args[4]);
     }
 
     // Runtime logs are written to files in the working directory.
@@ -644,7 +675,7 @@ int main(int argc, char *argv[])
     }
 
     logger.log(INFO, "Starting Branch & Price");
-    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, logger);
+    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, forbidden_arcs, logger, sep_heuristic);
 
     cerr << "Obtained continuous objective value: " + to_string(best_objective) << endl;
     for (Path& path : best_paths)
