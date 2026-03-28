@@ -292,7 +292,7 @@ int pricing_algorithm(vector<Path> &paths, GRBModel &master, GRBLinExpr &obj, ve
     return np;
 }
 
-vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, vector<int> forbidden_arcs, int k_paths)
+vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> arcs, int nn, Train train, int T, int t_s, vector<vector<double>> alpha, vector<int> forbidden_arcs, int k_paths, bool all_services_only)
 {
     int N = static_cast<int>(nodes.size());
     int k = train.get_ID();
@@ -399,10 +399,14 @@ vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> 
         }
     }
 
+    int full_mask = mask_count - 1;  // all bits set = all services covered
+
     // Collecter tous les (coût, état, slot) au nœud destination
     vector<tuple<double, int, int>> candidates;
     for (int mask = 0; mask < mask_count; mask++)
     {
+        if (all_services_only && mask != full_mask) continue;
+
         int s = state_index(1, mask);
         for (int slot = 0; slot < k_paths; slot++)
         {
