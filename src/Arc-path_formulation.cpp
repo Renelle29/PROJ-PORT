@@ -24,7 +24,40 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
     cerr << "Number of warm paths : " << warm_paths.size() << endl;
     for (Train train : trains) // For each train
     {
-        L = 0;
+        // Build initial path
+        k = train.get_ID();
+        s_id = 1;
+
+        // Build initial constraints
+        path_constraints.push_back(master.addConstr(0, GRB_GREATER_EQUAL, 1.0, "Flow train " + to_string(k))); // Build flow constraint
+        for (bool s : train.get_services())
+        {
+            s_assigned[k - 1].push_back(s);
+            if (s)
+            {
+                path_constraints.push_back(master.addConstr(0, GRB_GREATER_EQUAL, 1.0, "Train " + to_string(k) + " service " + to_string(s_id))); // Build service constraint
+            }
+            else
+            {
+                path_constraints.push_back(master.addConstr(0, GRB_GREATER_EQUAL, 0.0, "Train " + to_string(k) + " service " + to_string(s_id)));
+            }
+            s_id++;
+        }
+        p_id++;
+    }
+
+    for (int p = 1; p <= nn; p++)
+    {
+        for (int t = 0; t <= T; t += t_s)
+        {
+            path_constraints.push_back(master.addConstr(0.0, GRB_LESS_EQUAL, 1.0, "Incompatibility " + to_string(p) + " at " + to_string(t))); // build incompatibility constraint for node n
+        }
+    }
+
+    int nt = trains.size();
+
+    for (Train train : trains) // For each train
+    {
         // Build initial path
         k = train.get_ID();
         s_id = 1;
@@ -47,40 +80,36 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
                         arcs[train.get_dummy()].get_cost(k), k, ns);
         }
 
-        //path = Path(p_id, {train.get_dummy()}, arcs[train.get_dummy()].get_cost(k), k, ns);
-        path.build_GRBVar(master, obj);
-        // path.print();
+        GRBColumn column = GRBColumn();
 
-        // Build initial constraints
-        L += path.get_lambda();
-        path_constraints.push_back(master.addConstr(L, GRB_GREATER_EQUAL, 1.0, "Flow train " + to_string(k))); // Build flow constraint
-        for (bool s : train.get_services())
+        // Train flow constraint
+        c_id = get_constraint_id(k, nt, ns);
+        column.addTerm(1.0, path_constraints[c_id]);
+
+        // Service constraints
+        s_id = 1;
+        for (bool s : s_assigned[k-1])
         {
-            s_assigned[k - 1].push_back(s);
             if (s)
             {
-                path_constraints.push_back(master.addConstr(path.get_lambda(), GRB_GREATER_EQUAL, 1.0, "Train " + to_string(k) + " service " + to_string(s_id))); // Build service constraint
-                path.update_service(s_id);
-            }
-            else
-            {
-                path_constraints.push_back(master.addConstr(path.get_lambda(), GRB_GREATER_EQUAL, 0.0, "Train " + to_string(k) + " service " + to_string(s_id)));
+                c_id = get_constraint_id(k, s_id, nt, ns);
+                column.addTerm(1.0, path_constraints[c_id]); // always add for required services
             }
             s_id++;
         }
-        p_id++;
+
+        // Incompatibility constraints
+        for (int a_id : path.get_arcs())
+            for (pair<int, int> n : arcs[a_id].get_iNodes())
+            {
+                c_id = get_constraint_id(n.first, n.second, nt, ns, nn, T, t_s);
+                column.addTerm(1.0, path_constraints[c_id]);
+            }
+
+        path.build_GRBVar(master, obj, column);
         paths.push_back(path);
+        p_id++;
     }
-
-    for (int p = 1; p <= nn; p++)
-    {
-        for (int t = 0; t <= T; t += t_s)
-        {
-            path_constraints.push_back(master.addConstr(0.0, GRB_LESS_EQUAL, 1.0, "Incompatibility " + to_string(p) + " at " + to_string(t))); // build incompatibility constraint for node n
-        }
-    }
-
-    int nt = trains.size();
 
     for (Path& path : warm_paths)
     {

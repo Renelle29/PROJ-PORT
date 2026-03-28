@@ -174,6 +174,11 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
         nodes_explored++;
         logger.log(INFO, "Explored : " + to_string(nodes_explored) + " nodes.");
 
+        if (dwresults.extended_paths.empty()){
+            logger.log(INFO, "No paths, wait what does it mean again?");
+            continue;
+        }
+
         logger.log(INFO, "Found a continuous objective of : " + to_string(dwresults.continuous_obj));
 
         // Pruning
@@ -222,9 +227,12 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
                 vector<Path> new_paths;
 
                 for (auto [lambda, path] : dwresults.extended_paths)
+                {
+                    logger.log(INFO, "Path : " + to_string(path.get_id()) + " lambda : " + to_string(lambda));
                     if (lambda > 1 - 1e-9)  // only keep paths with lambda = 1
                         new_paths.push_back(path);
-                
+                }
+
                 best_paths = new_paths;
                 best_extended_paths = dwresults.extended_paths;
             }
@@ -446,6 +454,11 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
         master.setObjective(Master_obj, GRB_MINIMIZE);
         master.update();
         master.optimize();
+        if (master.get(GRB_IntAttr_Status) != 2)
+        {
+            cerr << "Reduced master non optimal" << endl;
+            return results;
+        }
         double continuous_obj = Master_obj.getValue();
         cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
 
@@ -460,7 +473,13 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
         
         results.np0 = np0;
     }
-    catch (...){
+    catch (GRBException e)
+    {
+        cerr << "Gurobi error code : " << e.getErrorCode() << endl;
+        cerr << "Gurobi error message : " << e.getMessage() << endl;
+    }
+    catch (...)
+    {
         cerr << "On a été dans le catch, c'est pas cool, j'pense y a un problème :'( bonne chance thierry & bruno !" << endl;
     }
 
