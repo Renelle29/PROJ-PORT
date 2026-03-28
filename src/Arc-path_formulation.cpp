@@ -80,6 +80,8 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
                         arcs[train.get_dummy()].get_cost(k), k, ns);
         }
 
+        bool is_dummy = path.get_arcs().size() == 1;
+
         GRBColumn column = GRBColumn();
 
         // Train flow constraint
@@ -88,12 +90,15 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
 
         // Service constraints
         s_id = 1;
-        for (bool s : s_assigned[k-1])
+        for (bool s : s_assigned[k - 1])
         {
             if (s)
             {
-                c_id = get_constraint_id(k, s_id, nt, ns);
-                column.addTerm(1.0, path_constraints[c_id]); // always add for required services
+                if (is_dummy || path.get_service(s_id))
+                {
+                    c_id = get_constraint_id(k, s_id, nt, ns);
+                    column.addTerm(1.0, path_constraints[c_id]);
+                }
             }
             s_id++;
         }
@@ -118,6 +123,8 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
         if (path_already_exists(paths, arc_ids, path.get_train()))
             continue;
 
+        bool is_dummy = path.get_arcs().size() == 1;
+
         int k = path.get_train();
         GRBColumn column = GRBColumn();
 
@@ -131,7 +138,7 @@ int initialize_master_AP(GRBModel &master, GRBLinExpr &obj, vector<Path> &paths,
         {
             if (s)
             {
-                if (path.get_service(s_id))
+                if (is_dummy || path.get_service(s_id))
                 {
                     c_id = get_constraint_id(k, s_id, nt, ns);
                     column.addTerm(1.0, path_constraints[c_id]);
@@ -428,10 +435,14 @@ vector<RcspResult> shortest_path_algorithm_rcsp(vector<Node> nodes, vector<Arc> 
         }
     }
 
+    int full_mask = mask_count - 1;  // all bits set = all services covered
+
     // Collecter tous les (coût, état, slot) au nœud destination
     vector<tuple<double, int, int>> candidates;
     for (int mask = 0; mask < mask_count; mask++)
     {
+        //if (mask != full_mask) continue;
+
         int s = state_index(1, mask);
         for (int slot = 0; slot < k_paths; slot++)
         {

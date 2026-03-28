@@ -232,6 +232,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
                 
                 best_paths = new_paths;
                 best_extended_paths = dwresults.extended_paths;
+                break;
             }
             continue;
         }
@@ -455,7 +456,7 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
         if (master.get(GRB_IntAttr_Status) != 2)
         {
             cerr << "Reduced master non optimal" << endl;
-            break;
+            return results;
         }
 
         double continuous_obj = Master_obj.getValue();
