@@ -31,6 +31,7 @@ using namespace std::chrono;
 int best_objective = 1e9;
 vector<Path> best_paths = {};
 vector<pair<double,Path>> best_extended_paths = {};
+bool DFS = true;
 
 struct BandPNode {
     vector<vector<int>> forbidden_arcs;
@@ -40,6 +41,147 @@ struct BandPNode {
 };
 
 static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, int max_iters, vector<Node> nodes, int k_paths, int time_budget, vector<vector<int>> forbidden_arcs, vector<Path> warm_paths);
+static DWResults solve_restricted_milp(vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, vector<Path> restricted_paths, Logger& logger, int time_limit = 30);
+
+static DWResults solve_restricted_milp(vector<Train> trains, vector<Arc> arcs, int nn, int T, int t_s, int ns, vector<Path> restricted_paths, Logger& logger, int time_limit)
+{
+    DWResults results;
+
+    try
+    {
+
+        int nt = trains.size();
+
+        GRBEnv env = GRBEnv(true);
+        env.set("LogFile", "mip1.log");
+        env.set("LogToConsole", "0");
+        env.start();
+
+        GRBModel master = GRBModel(env);
+        master.set("JSONSolDetail", "1");
+        master.set(GRB_DoubleParam_TimeLimit, time_limit); // x seconds limit
+        GRBLinExpr obj = 0;
+
+        vector<Path> paths;
+        vector<vector<bool>> s_assigned(nt);
+        vector<GRBConstr> path_constraints;
+
+        int k;
+        Path path;
+        int p_id = 1;
+        int s_id;
+        int c_id;
+        GRBLinExpr L;
+
+        // Initialize with dummy paths and constraints
+        for (Train train : trains)
+        {
+            L = 0;
+            k = train.get_ID();
+            s_id = 1;
+            path = Path(p_id, {train.get_dummy()}, arcs[train.get_dummy()].get_cost(k), k, ns);
+            path.build_GRBVar(master, obj);
+
+            L += path.get_lambda();
+            path_constraints.push_back(master.addConstr(L, GRB_GREATER_EQUAL, 1.0, "Flow train " + to_string(k)));
+            for (bool s : train.get_services())
+            {
+                s_assigned[k - 1].push_back(s);
+                if (s)
+                {
+                    path_constraints.push_back(master.addConstr(path.get_lambda(), GRB_GREATER_EQUAL, 1.0, "Train " + to_string(k) + " service " + to_string(s_id)));
+                    path.update_service(s_id);
+                }
+                else
+                {
+                    path_constraints.push_back(master.addConstr(path.get_lambda(), GRB_GREATER_EQUAL, 0.0, "Train " + to_string(k) + " service " + to_string(s_id)));
+                }
+                s_id++;
+            }
+            p_id++;
+            paths.push_back(path);
+        }
+
+        for (int p = 1; p <= nn; p++)
+            for (int t = 0; t <= T; t += t_s)
+                path_constraints.push_back(master.addConstr(0.0, GRB_LESS_EQUAL, 1.0, "Incompatibility " + to_string(p) + " at " + to_string(t)));
+
+        // Add restricted paths
+        for (Path& path : restricted_paths)
+        {
+            vector<int> arc_ids = path.get_arcs();
+            if (path_already_exists(paths, arc_ids, path.get_train()))
+                continue;
+
+            k = path.get_train();
+            GRBColumn column = GRBColumn();
+
+            c_id = get_constraint_id(k, nt, ns);
+            column.addTerm(1.0, path_constraints[c_id]);
+
+            s_id = 1;
+            for (bool s : s_assigned[k - 1])
+            {
+                if (s)
+                {
+                    if (path.get_service(s_id))
+                    {
+                        c_id = get_constraint_id(k, s_id, nt, ns);
+                        column.addTerm(1.0, path_constraints[c_id]);
+                    }
+                }
+                s_id++;
+            }
+
+            for (int a_id : path.get_arcs())
+                for (pair<int, int> n : arcs[a_id].get_iNodes())
+                {
+                    c_id = get_constraint_id(n.first, n.second, nt, ns, nn, T, t_s);
+                    column.addTerm(1.0, path_constraints[c_id]);
+                }
+
+            path.build_GRBVar(master, obj, column);
+            paths.push_back(path);
+            p_id++;
+        }
+
+        master.setObjective(obj, GRB_MINIMIZE);
+
+        // Solve as binary
+        solve_binary_model(master, paths);
+
+        if (master.get(GRB_IntAttr_SolCount) > 0)
+        {
+            double milp_obj = master.get(GRB_DoubleAttr_ObjVal);
+            logger.log(INFO, "Restricted MILP found solution : " + to_string(milp_obj));
+
+            results.continuous_obj = milp_obj;
+
+            vector<pair<double,Path>> extended_paths;
+            for (Path path : paths)
+            {
+                extended_paths.push_back(make_pair(path.get_lambda().get(GRB_DoubleAttr_X), path));
+            }
+            results.extended_paths = extended_paths;
+            
+            results.np0 = 0;
+
+            return results;
+        }
+        else
+        {
+            logger.log(INFO, "Restricted MILP did not find a solution, status : " + to_string(master.get(GRB_IntAttr_Status)));
+            return results;
+        }
+    }
+    catch (GRBException e)
+    {
+        cerr << "Gurobi error code : " << e.getErrorCode() << endl;
+        cerr << "Gurobi error message : " << e.getMessage() << endl;
+        return results;
+    }
+}
+
 
 static pair<vector<int>, vector<int>> partition_arcs(vector<Arc> arcs, vector<Node> nodes, Path path1, Path path2, int heuristic = 1)
 {
@@ -157,7 +299,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
     {
         // TODO - function to decide which node to explore
         BandPNode current_node;
-        if (best_objective > 1e9 - 1)
+        if (DFS)
             current_node = select_and_remove_node(nodes_to_explore, 0); // 0 = DFS, 1 = BFS
         else
             current_node = select_and_remove_node(nodes_to_explore, 1); // 0 = DFS, 1 = BFS
@@ -232,7 +374,7 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
                 
                 best_paths = new_paths;
                 best_extended_paths = dwresults.extended_paths;
-                break;
+                DFS = false;
             }
             continue;
         }
@@ -281,6 +423,27 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
             }
             return warm;
         };
+        
+        if (nodes_explored % 10 == 1)
+        {
+            vector<Path> lp_paths;
+            for (auto [lambda, path] : dwresults.extended_paths)
+                lp_paths.push_back(path);
+            DWResults heuristic_results = solve_restricted_milp(trains, arcs, nn, T, t_s, ns, lp_paths, logger, 60);
+            cerr << heuristic_results.continuous_obj << endl;
+
+            if (heuristic_results.continuous_obj < best_objective)
+            {
+                best_objective = heuristic_results.continuous_obj;
+                vector<Path> new_paths;
+
+                for (auto [lambda, path] : heuristic_results.extended_paths)
+                    new_paths.push_back(path);
+                    
+                best_paths = new_paths;
+                best_extended_paths = heuristic_results.extended_paths;
+            }
+        }
 
         // Create new nodes & add to list
         BandPNode left_node;

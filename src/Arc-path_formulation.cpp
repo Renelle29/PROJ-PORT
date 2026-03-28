@@ -538,6 +538,7 @@ void solve_binary_model(GRBModel &master, vector<Path> &paths)
     {
         path.get_lambda().set(GRB_CharAttr_VType, GRB_BINARY);
     }
+    
     master.update();
     master.optimize();
 
