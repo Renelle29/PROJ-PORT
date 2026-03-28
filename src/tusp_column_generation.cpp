@@ -183,6 +183,11 @@ static int bandp(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int T, 
             continue;
         }
 
+        if (dwresults.extended_paths.empty()){
+            logger.log(INFO, "DW infeasible");
+            continue;
+        }
+
         // TODO - Branching - NAIVE FOR NOW - Think about other branching ideas
 
         int fractional_train = -1;
@@ -446,6 +451,13 @@ static DWResults dw(int nt, vector<Train> trains, vector<Arc> arcs, int nn, int 
         master.setObjective(Master_obj, GRB_MINIMIZE);
         master.update();
         master.optimize();
+
+        if (master.get(GRB_IntAttr_Status) != 2)
+        {
+            cerr << "Reduced master non optimal" << endl;
+            break;
+        }
+
         double continuous_obj = Master_obj.getValue();
         cerr << "Obtained continuous objective value: " + to_string(continuous_obj) << endl;
 
