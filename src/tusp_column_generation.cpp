@@ -531,10 +531,10 @@ static void ensure_dir(const string &path)
 int main(int argc, char *argv[])
 {
     // CLI:
-    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths] [sep_heuristic]
-    if (argc < 8)
+    //   tusp_solver "<station name>" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths] [sep_heuristic] [max_bandp_nodes]
+    if (argc < 9)
     {
-        cerr << "Usage: tusp_solver \"<station name>\" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths] [sep_heuristic]" << endl;
+        cerr << "Usage: tusp_solver \"<station name>\" <scenario_number> [time_budget_cg_seconds] [max_iters] [time_budget_binary_ilp_seconds] [k_paths] [sep_heuristic] [max_bandp_nodes]" << endl;
         return 1;
     }
 
@@ -548,6 +548,7 @@ int main(int argc, char *argv[])
     double time_budget_binary = 0.0; // 0 means no time limit for final binary master (integer solve)
     int k_paths = 1;
     int sep_heuristic = 1;
+    int max_bandp_nodes = 100;
 
     vector<double> numeric_args;
     for (int i = 3; i < argc; i++)
@@ -576,6 +577,10 @@ int main(int argc, char *argv[])
     if (numeric_args.size() > 4)
     {
         sep_heuristic = static_cast<int>(numeric_args[4]);
+    }
+    if (numeric_args.size() > 5)
+    {
+        max_bandp_nodes = static_cast<int>(numeric_args[5]);
     }
 
     // Runtime logs are written to files in the working directory.
@@ -747,7 +752,7 @@ int main(int argc, char *argv[])
     }
 
     logger.log(INFO, "Starting Branch & Price");
-    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, logger, sep_heuristic);
+    bandp(nt, trains, arcs, nn, T, t_s, ns, max_iters, nodes, k_paths, time_budget, logger, sep_heuristic, max_bandp_nodes);
 
     cerr << "Obtained continuous objective value: " + to_string(best_objective) << endl;
     for (Path& path : best_paths)
